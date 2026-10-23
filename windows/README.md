@@ -85,6 +85,20 @@ pip install -r Action_Space\drone_deployment_infra\cal_and_map\requirements.txt
 pip install -e Action_Space\drone_deployment_infra\cal_and_map
 ```
 
+Then, with the drone on and the USB dongle plugged in (neither tool can take off):
+
+```powershell
+netsh wlan show networks interface="Wi-Fi 2" | Select-String TELLO   # which drones are in range
+python windows\tello_check.py --ssid TELLO-1      # link, battery/height/attitude, live camera + tag ids
+python windows\tello_map_win.py --ssid TELLO-1    # walk the drone around: AprilTag room map (tag-10 frame)
+```
+
+`tello_map_win.py` runs the repo's `cal_and_map/tello_map.py` mapping loop through its read-only
+`TelloLink`. It writes `config/map_<drone>_<time>.yaml` and never overwrites `map.yaml`, which the
+sim's room task reads. Copy the new map over `map.yaml` once you've checked it. Note:
+`config/camera/tello_{1,2,5-9}.yaml` are copies of TELLO-4's calibration; only TELLO-3 and TELLO-4
+were calibrated themselves.
+
 The docs say `../.venv/bin/python`; use `python` from this env instead. Single-drone scripts
 that talk to the Tello over the laptop's own Wi-Fi (djitellopy, 192.168.10.1) should work.
 Anything using `core/tello_link.py`, `tello_dongle_setup.py` or `swarm_ops/connect.py` needs Linux.
