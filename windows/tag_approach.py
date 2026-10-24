@@ -46,8 +46,9 @@ from tello_calibration.tags.mapping import TagMap, invert  # noqa: E402
 from tello_calibration.utils.config import CONFIG_DIR  # noqa: E402
 from tello_check import TELLO_IP, join, local_ip_toward_tello  # noqa: E402
 
-# m/s per rc unit (control/tello_motion_fit.yaml)
-RIGHT_GAIN, FWD_GAIN, UP_GAIN = 0.008, 0.00731, 0.006
+# m/s per rc unit. Up is from control/tello_motion_fit.yaml (TELLO-1). Horizontal is TELLO-7's,
+# measured on 2026-10-24: forward rc 41 flew 0.85-0.9 m/s, not the fit's 0.3, and it hit tag 8.
+UP_GAIN = 0.006
 
 
 class NumpyPolicy:
@@ -87,6 +88,7 @@ def main() -> int:
     ap.add_argument("--tol", type=float, default=0.10, help="counts as arrived within this [m]")
     ap.add_argument("--act-scale", type=float, default=0.3, help="m/s at action 1 (the Real task's speed)")
     ap.add_argument("--max-speed", type=float, default=0.3, help="horizontal speed cap [m/s]")
+    ap.add_argument("--h-gain", type=float, default=0.021, help="horizontal m/s per rc unit (TELLO-7: ~0.021)")
     ap.add_argument("--max-climb", type=float, default=0.3, help="vertical speed cap [m/s]")
     ap.add_argument("--search-yaw", type=int, default=25, help="rc yaw while searching (+ = clockwise)")
     ap.add_argument("--search-time", type=float, default=40.0, help="land if the tag is not found in this [s]")
@@ -171,6 +173,7 @@ def main() -> int:
     phase, phase_t = "SEARCH", time.time()
     z_goal = search_height(target)
     seen_t, held_since = 0.0, None
+    last_rng = 9.0
     pred_fixed = None  # last map prediction of the target: (xy in the takeoff-yaw frame, up, time)
     track: list[tuple[float, np.ndarray]] = []  # (t, tag position in the takeoff-yaw frame) for velocity
     z_hist: list[tuple[float, float]] = []
@@ -288,11 +291,18 @@ def main() -> int:
             if phase == "SEARCH" or tag_b is None:
                 act[:2] = 0.0  # no horizontal goal without the tag
             v_cmd = np.clip(act[:2] * args.act_scale, -args.max_speed, args.max_speed)
-            if tag_b is not None and np.linalg.norm(tag_b[:2]) < 0.3:
-                v_cmd[0] = min(v_cmd[0], -0.1)  # too close: back off whatever the policy says
+            if tag_b is not None:
+                rng = float(np.linalg.norm(tag_b[:2]))
+                last_rng = rng
+                if rng < standoff - 0.15:
+                    v_cmd[0] = min(v_cmd[0], -0.15)  # too close: back off whatever the policy says
+                elif rng < standoff + 0.4 and v_b[0] > 0.15:
+                    v_cmd[0] = min(v_cmd[0], -0.15)  # closing fast near the stand-off: brake
+            elif phase != "SEARCH" and t0 - seen_t < 1.0 and last_rng < 1.0:
+                v_cmd[0] = -0.15  # lost it up close (out of view, or about to hit it): back away
             up_cmd = float(np.clip(act[2] * args.act_scale, -args.max_climb, args.max_climb)) if z is not None else 0.0
-            rc = [int(np.clip(round(-v_cmd[1] / RIGHT_GAIN), -100, 100)),
-                  int(np.clip(round(v_cmd[0] / FWD_GAIN), -100, 100)),
+            rc = [int(np.clip(round(-v_cmd[1] / args.h_gain), -100, 100)),
+                  int(np.clip(round(v_cmd[0] / args.h_gain), -100, 100)),
                   int(np.clip(round(up_cmd / UP_GAIN), -100, 100)),
                   int(yaw_rc)]
             if flying:
