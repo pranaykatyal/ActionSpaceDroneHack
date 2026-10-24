@@ -56,7 +56,9 @@ SEARCH_YAW = 20            # rc yaw while sweeping
 SEARCH_LEG_S = 2.5         # seconds per left/right sweep leg
 LOST_LAND_S = 10.0         # lost this long in auto -> land where it is
 MANUAL_FRESH_S = 0.35      # manual sticks expire (deadman) after this
-MANUAL_MAX = 40            # cap on manual rc magnitude
+# cap on manual rc magnitude; a policy steering through /api/<iface>/rc (e.g. the guard
+# runner at 0.65 m/s needs ~85) raises it with TELLO_MANUAL_MAX
+MANUAL_MAX = int(os.environ.get("TELLO_MANUAL_MAX", "40"))
 RC_HZ = 20.0
 STREAM_WIDTH = 640           # px, width of the MJPEG sent to the browser
 AIM_DEG = 6.0              # tag within this bearing counts as "facing it"

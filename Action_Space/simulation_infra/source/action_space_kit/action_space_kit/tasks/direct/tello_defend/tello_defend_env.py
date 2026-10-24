@@ -45,6 +45,8 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
             device=self.device,
         )
         attacker_command = self.cfg.attacker_command or self.cfg.command
+        # attacker speeds are in m/s; their actions are fractions of *their* controller's max
+        self._attacker_max_speed = attacker_command.max_lin_speed
         self._defender_ctl = [make_controller(self.cfg.command) for _ in range(self.cfg.num_defenders)]
         self._attacker_ctl = [make_controller(attacker_command) for _ in range(self.cfg.num_attackers)]
         # cfg.defender_base == "guard": scripted interceptor the policy adds a residual to
@@ -159,11 +161,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         wait_return = sample_uniform(*self.cfg.retry_wait_return, captured.shape, self.device)
         wait_hold = sample_uniform(*self.cfg.retry_wait_hold, captured.shape, self.device)
         wait = torch.where(choice == RETURNING, wait_return, wait_hold)
-        angle = sample_uniform(0.0, 6.2832, captured.shape, self.device)
-        goal = self.scene.env_origins.unsqueeze(1).repeat(1, self.cfg.num_attackers, 1)
-        goal[..., 0] += self.cfg.spawn_radius * torch.cos(angle)
-        goal[..., 1] += self.cfg.spawn_radius * torch.sin(angle)
-        goal[..., 2] += sample_uniform(1.5, 3.0, captured.shape, self.device)
+        goal = self._attacker_spawn(self.scene.env_origins)
         self._attacker_mode = torch.where(captured, choice, self._attacker_mode)
         self._attacker_timer = torch.where(captured, wait, self._attacker_timer)
         self._attacker_goal = torch.where((captured & (choice == RETURNING)).unsqueeze(-1), goal, self._attacker_goal)
@@ -225,7 +223,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 lateral = torch.stack([-direction[:, 1], direction[:, 0], torch.zeros_like(direction[:, 0])], dim=-1)
                 direction = direction + self.cfg.attacker_evasion * torch.sin(phase).unsqueeze(-1) * lateral
                 direction = direction / torch.clamp(torch.linalg.norm(direction, dim=-1, keepdim=True), min=1e-6)
-            speed = (self._attacker_speed[:, i] / self.cfg.command.max_lin_speed).unsqueeze(-1)
+            speed = (self._attacker_speed[:, i] / self._attacker_max_speed).unsqueeze(-1)
             action = torch.cat([direction * speed, torch.zeros(self.num_envs, 1, device=self.device)], dim=-1)
             # a downed attacker stops moving
             action = action * self._attacker_alive[:, i].unsqueeze(-1).float()
@@ -235,7 +233,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 back = to_goal / torch.clamp(torch.linalg.norm(to_goal, dim=-1, keepdim=True), min=1e-6)
                 back = torch.cat([back * speed, torch.zeros(self.num_envs, 1, device=self.device)], dim=-1)
                 sink = torch.zeros_like(action)
-                sink[:, 2] = -self.cfg.retry_out_descent / self.cfg.command.max_lin_speed
+                sink[:, 2] = -self.cfg.retry_out_descent / self._attacker_max_speed
                 action = torch.where(mode == RETURNING, back, action)
                 action = torch.where(mode == OUT, sink, action)
             actions.append(action.clamp(-1.0, 1.0))
@@ -400,18 +398,35 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         time_outs = {agent: time_out for agent in self.cfg.possible_agents}
         return terminated, time_outs
 
+    def _attacker_spawn(self, origins: torch.Tensor) -> torch.Tensor:
+        """Where attackers enter, (N, num_attackers, 3) world positions for the given env origins.
+
+        "ring": anywhere on spawn_radius around the site, 1.5-3 m up. "lane": in front of a wall
+        lane_offset[0] from the site (the real room: attackers launch at tag 10 and fly to tag 6),
+        spread lane_offset[1..2] along it and lane_height up."""
+        shape = (origins.shape[0], self.cfg.num_attackers)
+        out = origins.unsqueeze(1).repeat(1, self.cfg.num_attackers, 1)
+        if self.cfg.attacker_spawn == "lane":
+            out[..., 0] += self.cfg.lane_offset[0]
+            out[..., 1] += sample_uniform(self.cfg.lane_offset[1], self.cfg.lane_offset[2], shape, self.device)
+            out[..., 2] += sample_uniform(*self.cfg.lane_height, shape, self.device)
+        else:
+            angle = sample_uniform(0.0, 6.2832, shape, self.device)
+            out[..., 0] += self.cfg.spawn_radius * torch.cos(angle)
+            out[..., 1] += self.cfg.spawn_radius * torch.sin(angle)
+            out[..., 2] += sample_uniform(1.5, 3.0, shape, self.device)
+        return out
+
     def _respawn_attackers(self, env_ids: torch.Tensor) -> None:
         """Send a fresh wave into the listed environments, leaving defenders as they are."""
         if len(env_ids) == 0:
             return
         num = len(env_ids)
         origins = self.scene.env_origins[env_ids]
+        spawn = self._attacker_spawn(origins)
         for i, drone in enumerate(self._attackers):
-            angle = sample_uniform(0.0, 6.2832, (num,), self.device)
             state = drone.data.default_root_state[env_ids].clone()
-            state[:, 0] = origins[:, 0] + self.cfg.spawn_radius * torch.cos(angle)
-            state[:, 1] = origins[:, 1] + self.cfg.spawn_radius * torch.sin(angle)
-            state[:, 2] = origins[:, 2] + sample_uniform(1.5, 3.0, (num,), self.device)
+            state[:, :3] = spawn[:, i]
             state[:, 7:] = 0.0
             drone.write_root_pose_to_sim(state[:, :7], env_ids)
             drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
@@ -436,25 +451,29 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         num = len(env_ids)
         origins = self.scene.env_origins[env_ids]
 
-        # defenders start on a ring around the site
+        # defenders start on a ring around the site, or ("lane") at waiting spots between the
+        # site and the attackers' wall, spread across the lane like the real runner's home spots
         for i, drone in enumerate(self._defenders):
-            angle = sample_uniform(0.0, 6.2832, (num,), self.device)
             state = drone.data.default_root_state[env_ids].clone()
-            state[:, 0] = origins[:, 0] + self.cfg.defender_radius * torch.cos(angle)
-            state[:, 1] = origins[:, 1] + self.cfg.defender_radius * torch.sin(angle)
+            if self.cfg.attacker_spawn == "lane":
+                across = (i - (self.cfg.num_defenders - 1) / 2) * 0.9
+                state[:, 0] = origins[:, 0] - self.cfg.home_distance + sample_uniform(-0.3, 0.3, (num,), self.device)
+                state[:, 1] = origins[:, 1] + across + sample_uniform(-0.3, 0.3, (num,), self.device)
+            else:
+                angle = sample_uniform(0.0, 6.2832, (num,), self.device)
+                state[:, 0] = origins[:, 0] + self.cfg.defender_radius * torch.cos(angle)
+                state[:, 1] = origins[:, 1] + self.cfg.defender_radius * torch.sin(angle)
             state[:, 2] = origins[:, 2] + sample_uniform(1.0, 2.0, (num,), self.device)
             state[:, 7:] = 0.0
             drone.write_root_pose_to_sim(state[:, :7], env_ids)
             drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
             self._defender_ctl[i].reset(env_ids)
 
-        # attackers enter from a wider ring
+        # attackers enter from a wider ring, or from the far wall
+        spawn = self._attacker_spawn(origins)
         for i, drone in enumerate(self._attackers):
-            angle = sample_uniform(0.0, 6.2832, (num,), self.device)
             state = drone.data.default_root_state[env_ids].clone()
-            state[:, 0] = origins[:, 0] + self.cfg.spawn_radius * torch.cos(angle)
-            state[:, 1] = origins[:, 1] + self.cfg.spawn_radius * torch.sin(angle)
-            state[:, 2] = origins[:, 2] + sample_uniform(1.5, 3.0, (num,), self.device)
+            state[:, :3] = spawn[:, i]
             state[:, 7:] = 0.0
             drone.write_root_pose_to_sim(state[:, :7], env_ids)
             drone.write_root_velocity_to_sim(state[:, 7:], env_ids)

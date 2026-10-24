@@ -15,7 +15,7 @@ HOURS=${4:-2.5}
 shift $(( $# < 4 ? $# : 4 ))
 [ $# -gt 0 ] || set -- ""
 AUTOR=${AUTOR:-$HOME/.local/bin/autor}
-TAG=guard_$(date +%Y%m%d_%H%M)
+TAG=${TASK_TAG:-guard}_$(date +%Y%m%d_%H%M)
 K=/workspace/isaaclab/isaaclab.sh
 S=/data/as/simulation_infra/scripts
 
@@ -28,11 +28,11 @@ for v in "$@"; do
   SETS=$(echo "$v" | tr ' ' '\n' | { grep '^env\.' || true; } | sed 's/^env\.//' | tr '\n' ' ')
   echo "v$i: $v"
   TRAIN="$TRAIN (mkdir -p $D && cd $D && echo '$v' > variant.txt &&
-     timeout ${HOURS}h $K -p $S/skrl/train.py --task AS-Defend-Guard-v0 --algorithm MAPPO --headless \
+     timeout ${HOURS}h $K -p $S/skrl/train.py --task ${TASK:-AS-Defend-Guard-v0} --algorithm MAPPO --headless \
        --num_envs $ENVS --max_iterations $ITERS $v > train.log 2>&1; echo v$i train exit \$?) &"
   EVAL="$EVAL cd $D; RUN=\$(ls -d logs/skrl/tello_defend/*guard* | tail -1);
      for c in best_agent.pt \$(ls \$RUN/checkpoints/ | grep '^agent_' | sort -t_ -k2 -n | tail -2); do
-       $K -p $S/evaluate.py --task AS-Defend-Guard-v0 --algorithm MAPPO --checkpoint \$RUN/checkpoints/\$c \
+       $K -p $S/evaluate.py --task ${TASK:-AS-Defend-Guard-v0} --algorithm MAPPO --checkpoint \$RUN/checkpoints/\$c \
          --num_envs 256 --episodes 1000 --headless ${SETS:+--set $SETS} > eval_\$c.log 2>&1;
      done;"
   i=$((i + 1))
@@ -46,7 +46,7 @@ done
     # the node image ships skrl 1.4.3; the configs and the clip_actions fix assume 2.1.1
     $K -p -m pip install -q skrl==2.1.1
     mkdir -p /data/runs/$TAG && cd /data/runs/$TAG
-    $K -p $S/evaluate.py --task AS-Defend-Guard-v0 --baseline zero --num_envs 256 --episodes 1000 --headless \
+    $K -p $S/evaluate.py --task ${TASK:-AS-Defend-Guard-v0} --baseline zero --num_envs 256 --episodes 1000 --headless \
       > /data/runs/$TAG/eval_guard_only.log 2>&1 &
     $TRAIN
     wait

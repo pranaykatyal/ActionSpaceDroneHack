@@ -201,7 +201,7 @@ def main():
                     captures_so_far[row] = 0.0
             step_in_episode[finished] = 0.0
 
-    label = args_cli.checkpoint or f"baseline:{args_cli.baseline or zero}"
+    label = args_cli.checkpoint or f"baseline:{args_cli.baseline or 'zero'}"
     print("\n=== %s on %s ===" % (label, args_cli.task), flush=True)
     print("episodes:            %d" % episodes, flush=True)
     print("interception rate:   %.1f%% of attackers" % (100.0 * intercepted / max(attacker_slots, 1)), flush=True)

@@ -117,6 +117,11 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     guard_uses_status = True
     """The guard reads the attacking flags; False infers them from motion, as on real drones."""
     guard_kwargs: dict = {}
+    attacker_spawn = "ring"
+    """"ring" around the site, or "lane": from a wall lane_offset[0] away (see _attacker_spawn)."""
+    lane_offset = [-5.9, -2.1, 0.0]  # [m] wall x from the site, lane y range (room: tag 10 -> tag 6)
+    lane_height = [1.0, 1.8]  # [m]
+    home_distance = 2.0  # [m] "lane": defenders start this far from the site towards the wall
     world_frame_force = False
     """Rotate the controller's world-frame force into the body frame before applying it (Isaac
     Lab applies external forces in the body frame). False keeps the stock, buggy behaviour."""
@@ -148,3 +153,23 @@ class TelloDefendGuardEnvCfg(TelloDefendEnvCfg):
     guard_kwargs: dict = {"park_radius": 4.0, "park_lead": 0.25, "guard_offset": 0.2}
     residual_scale = 0.3
     observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * (NUM_DEFENDERS - 1) + 3 for i in range(NUM_DEFENDERS)}
+
+
+@configclass
+class TelloDefendRoomEnvCfg(TelloDefendGuardEnvCfg):
+    """The real game as described on 2026-10-24: attackers launch at tag 10 and fly ~6 m to
+    tag 6; defenders capped at 0.65 m/s (battery), attackers about as fast or a bit faster;
+    an attacker is out only on contact (capture rules unwritten, so assume collision)."""
+
+    attacker_spawn = "lane"
+    site_radius = 0.75  # [m] goal area around tag 6
+    capture_radius = 0.25  # [m] contact: Tello bodies with guards are ~0.2 m across
+    command: TelloCommandCfg = TelloCommandCfg(max_lin_speed=0.65, response_time=0.3, command_latency_steps=6)
+    attacker_command: TelloCommandCfg = TelloCommandCfg(max_lin_speed=1.0, response_time=0.15)
+    attacker_speed = [0.6, 0.8]
+    attacker_evasion = 0.2
+    # block on the attacker's path (dock_gap 0) instead of beside it; park touching distance
+    guard_kwargs: dict = {
+        "speed": 0.65, "intercept_radius": 1.35, "park_radius": 3.0,
+        "dock_gap": 0.0, "guard_offset": 0.12, "park_lead": 0.1,
+    }

@@ -58,7 +58,8 @@ class InterceptGuard:
         self.dock_range = dock_range  # [m] switch from intercepting to docking this close
         self.dock_gap = dock_gap  # [m] docking distance, inside the 0.35 m capture radius
         self.dock_speed = dock_speed  # [m/s] fastest approach relative to the target while docking
-        self.goalkeep = goalkeep  # wait beside the path of an attacker coming at the defender        self.park_lead = park_lead  # [m] parked guard point is also this far towards the site
+        self.goalkeep = goalkeep  # wait beside the path of an attacker coming at the defender
+        self.park_lead = park_lead  # [m] parked guard point is also this far towards the site
         self.intercept_radius = intercept_radius
         self.park_radius = park_radius
         self.speed = speed
