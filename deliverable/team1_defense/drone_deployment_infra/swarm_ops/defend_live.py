@@ -95,6 +95,7 @@ def main():
     ap.add_argument("--max-rc", type=int, default=45, help="defender stick limit")
     ap.add_argument("--capture", type=float, default=0.45, help="standalone: catch distance, m")
     ap.add_argument("--duration", type=float, default=40.0, help="seconds after GO, then land all")
+    ap.add_argument("--max-tilt", type=float, default=15.0, help="ignore tags mapped this many degrees off flat/upright")
     ap.add_argument("--fly", action="store_true")
     args = ap.parse_args()
     fly = args.fly
@@ -114,6 +115,15 @@ def main():
     lo = np.min([Track(floor_m).to_g(t) for _, t in tag_map.values()], axis=0) - 0.2
     hi = np.max([Track(floor_m).to_g(t) for _, t in tag_map.values()], axis=0) + 0.2
     lo[2], hi[2] = 0.4, 2.0
+    # a tag is flat on the floor or upright on a wall; one mapped more than --max-tilt off both
+    # (the organisers' final map has several, faces flipped into the floor) would corrupt every
+    # camera fix taken from it, so localization ignores it
+    tilt = {k: np.degrees(np.arccos(np.clip(max(abs(R[1, 2]), np.hypot(R[0, 2], R[2, 2])), 0.0, 1.0)))
+            for k, (R, _) in tag_map.items()}
+    bad = sorted(k for k, a in tilt.items() if a > args.max_tilt and k != 10)
+    if bad:
+        print("Map: not localizing from tilted tags " + ", ".join(f"{k} ({tilt[k]:.0f} deg)" for k in bad), flush=True)
+        tag_map = {k: v for k, v in tag_map.items() if k not in bad}
 
     mapcheck = sf.MapCheck(tag_map)
     by_num = {d.num: d for d in sf.load_drones(args.config, set(def_nums + own_att), str(CAMERA_DIR), fly,
