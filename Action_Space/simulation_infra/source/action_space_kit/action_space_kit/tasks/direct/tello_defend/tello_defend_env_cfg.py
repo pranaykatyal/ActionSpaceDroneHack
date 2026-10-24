@@ -184,6 +184,10 @@ class TelloDefendRoomEnvCfg(TelloDefendGuardEnvCfg):
     an attacker is out only on contact (capture rules unwritten, so assume collision)."""
 
     attacker_spawn = "lane"
+    # the organisers' final room (config/map.yaml, 2026-10-24 noon): tag 6 is 4.21 m out from the
+    # tag-10 wall and 3.16 m to its right. Attackers launch 0.6 m in front of that wall, across the
+    # room (map x -0.5 .. 2.8 = 3.7 .. 0.4 m to the left of tag 6)
+    lane_offset = [-3.6, -3.7, -0.4]
     site_radius = 0.75  # [m] goal area around tag 6
     capture_radius = 0.25  # [m] contact: Tello bodies with guards are ~0.2 m across
     command: TelloCommandCfg = TelloCommandCfg(max_lin_speed=0.65, response_time=0.3, command_latency_steps=6)
