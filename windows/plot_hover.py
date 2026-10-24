@@ -13,6 +13,10 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", required=True, help="skrl checkpoint (best_agent.pt)")
+parser.add_argument("--task", default="AS-Tello-Hover-v0", help="AS-Tello-Hover-v0 or AS-Tello-Waypoint-v0")
+parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
+                    help="env cfg overrides the policy was trained with, e.g. observe_goal_velocity=True. "
+                    "Leave reward terms at their defaults so every run is scored on the stock reward.")
 parser.add_argument("--num_envs", type=int, default=512, help="drones scored (same seeded starts for every pilot)")
 parser.add_argument("--show", type=int, default=8, help="drones drawn in the plot and video")
 parser.add_argument("--out", default="outputs/hover_policy.png")
@@ -80,16 +84,36 @@ def rollout(env, pilot, seed):
     return torch.stack(pos), goals.cpu(), torch.stack(dist), (~alive).cpu(), ret.cpu()
 
 
-cfg = parse_env_cfg("AS-Tello-Hover-v0", device=args_cli.device, num_envs=args_cli.num_envs)
-env = gym.make("AS-Tello-Hover-v0", cfg=cfg)
+cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+for item in args_cli.set:
+    key, value = item.split("=", 1)
+    setattr(cfg, key, {"true": True, "false": False}.get(value.lower(), value))
+env = gym.make(args_cli.task, cfg=cfg)
 dev = env.unwrapped.device
 dt = env.unwrapped.step_dt
 
 policy = load_policy(args_cli.checkpoint, dev)
+
+
+def goal_velocity():
+    """The goal's world velocity [m/s] (Waypoint moves it; Hover's goal is still)."""
+    u = env.unwrapped
+    return u._goal_vel_w if hasattr(u, "_goal_vel_w") else torch.zeros(u.num_envs, 3, device=dev)
+
+
+def p_controller(obs, gain, feedforward=None):
+    """Velocity command u = feedforward + gain * goal_error (obs[:, :3]), clipped to the stick range."""
+    v = gain * obs[:, :3] + (feedforward if feedforward is not None else 0.0)
+    return torch.cat([v.clamp(-1, 1), torch.zeros(obs.shape[0], 1, device=dev)], -1)
+
+
 pilots = {
     "trained policy": policy,
     "do nothing": lambda obs: torch.zeros(obs.shape[0], 4, device=dev),
-    "P-controller": lambda obs: torch.cat([obs[:, :3].clamp(-1, 1), torch.zeros(obs.shape[0], 1, device=dev)], -1),
+    "P-controller": lambda obs: p_controller(obs, gain=1.0),
+    "P x3": lambda obs: p_controller(obs, gain=3.0),
+    # CLF V = |e|^2/2 with u = v_goal + k e gives dV/dt = -2k V; uses the goal velocity, which the policy can't see
+    "CLF (sees v_goal)": lambda obs: p_controller(obs, gain=3.0, feedforward=goal_velocity()),
 }
 with torch.inference_mode():
     runs = {name: rollout(env, pilot, seed=7) for name, pilot in pilots.items()}
@@ -126,11 +150,11 @@ for i in range(pos.shape[1]):
 ax.set(title="Trained policy, 3D", xlabel="x", ylabel="y", zlabel="z")
 
 ax = fig.add_subplot(2, 1, 2)  # distance to goal, all pilots
-styles = {"trained policy": "-", "do nothing": ":", "P-controller": "--"}
+styles = {"trained policy": "-", "do nothing": ":", "P-controller": "--", "P x3": "-.", "CLF (sees v_goal)": (0, (1, 1))}
 for name, (_, _, dist, dead, ret) in runs.items():
     t = torch.arange(dist.shape[0]) * dt
     mean = torch.nanmean(dist, dim=1)
-    ax.plot(t, mean, styles[name], lw=2.5, label=f"{name}: return {ret.mean():.1f}, final {mean[-1]*100:.1f} cm, "
+    ax.plot(t, mean, linestyle=styles[name], lw=2.5, label=f"{name}: return {ret.mean():.1f}, final {mean[-1]*100:.1f} cm, "
             f"crashed {int(dead.sum())}/{dist.shape[1]}")
     if name == "trained policy":
         for i in range(show):
@@ -177,10 +201,11 @@ def render_video(path, fps=30):
     curves = {}
     for name, (_, _, dist, _, _) in runs.items():
         mean = torch.nanmean(dist, dim=1)
-        axd.plot(t_all, mean, styles[name], lw=1, alpha=0.25, color="gray")
-        curves[name] = (mean, axd.plot([], [], styles[name], lw=2.5, label=name)[0])
+        axd.plot(t_all, mean, linestyle=styles[name], lw=1, alpha=0.25, color="gray")
+        curves[name] = (mean, axd.plot([], [], linestyle=styles[name], lw=2.5, label=name)[0])
     cursor = axd.axvline(0, color="k", lw=0.8)
-    axd.set(xlim=(0, float(t_all[-1])), ylim=(0, 0.35), xlabel="time [s]", ylabel="mean distance to goal [m]",
+    top = max(float(torch.nan_to_num(m, nan=0.0).max()) for m, _ in curves.values()) * 1.1
+    axd.set(xlim=(0, float(t_all[-1])), ylim=(0, top), xlabel="time [s]", ylabel="mean distance to goal [m]",
             title="Distance to goal: trained policy vs baselines")
     axd.legend(loc="upper right")
     axd.grid(alpha=0.3)
