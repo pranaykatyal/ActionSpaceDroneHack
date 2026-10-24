@@ -154,8 +154,24 @@ def main() -> int:
     if battery < args.min_battery and not args.dry:
         print(f"battery below {args.min_battery}%: charge first")
         return 1
-    tello.streamon()
-    frames = tello.get_frame_read()
+    frames = None
+    for attempt in range(3):  # the stream sometimes needs a second try after a reboot
+        try:
+            tello.streamon()
+            frames = tello.get_frame_read()
+            break
+        except Exception as exc:  # noqa: BLE001
+            print(f"[video] attempt {attempt + 1} failed ({exc}); retrying", flush=True)
+            tello.background_frame_read = None
+            try:
+                tello.streamoff()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(2.0)
+    if frames is None:
+        print("no video: power-cycle the drone and close other drone scripts (UDP 11111 busy?)", flush=True)
+        tello.end()
+        return 1
 
     log_dir = HERE / "flight_logs"
     log_dir.mkdir(exist_ok=True)
