@@ -430,7 +430,7 @@ def selftest(args, poses) -> int:
     return 0
 
 
-def main() -> int:
+def make_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--defenders", nargs="+", default=["TELLO-7"], help="drone names this runner steers")
     ap.add_argument("--fly", action="store_true", help="send sticks to drone_gui (default: dry run)")
@@ -462,7 +462,11 @@ def main() -> int:
     ap.add_argument("--attackers", type=int, default=2)
     ap.add_argument("--attacker-speed", type=float, default=0.7)
     ap.add_argument("--capture-radius", type=float, default=0.35, help="selftest only: dismissal distance [m]")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    args = make_parser().parse_args()
 
     poses = load_map(args.map)
     if args.goal_tag not in poses:
