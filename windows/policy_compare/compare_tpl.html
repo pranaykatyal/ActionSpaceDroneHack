@@ -1,0 +1,73 @@
+<title>Defense Policy Comparison</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Breach table (policies x scenarios), then per policy the same three episodes as static SVG. No script. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1d2330; --muted: #5d6677; --line: #d9dde5;
+  --def: #2463c7; --att: #c8322b; --goal: #c8322b; --catch: #2e8b57; --grid: #e6e9ef; --room: #fbfbfc;
+  --good: #dff3e6; --ok: #eef5d8; --warn: #fbecd2; --bad: #f9dcda;
+  --sans: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151b; --panel: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2c323d;
+  --def: #6ea0ff; --att: #ff6a5f; --goal: #ff6a5f; --catch: #5fd08e; --grid: #262b34; --room: #1e232c;
+  --good: #183a26; --ok: #2c3618; --warn: #3f3018; --bad: #45201e; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2c323d;
+  --def: #6ea0ff; --att: #ff6a5f; --goal: #ff6a5f; --catch: #5fd08e; --grid: #262b34; --room: #1e232c;
+  --good: #183a26; --ok: #2c3618; --warn: #3f3018; --bad: #45201e; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); margin: 0;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) 32px max(16px, env(safe-area-inset-left, 0px)); }
+h1 { font-size: 1.4rem; margin: 0 0 4px; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0 0 14px; max-width: 85ch; line-height: 1.45; font-size: 14px; }
+.tablewrap { overflow-x: auto; margin: 0 0 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table.cmp { border-collapse: collapse; font-size: 13px; min-width: 1040px;}
+table.cmp.mof { min-width: 560px; width: 100%; }
+.cmp th, .cmp td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.cmp thead th { color: var(--muted); font-weight: 600; font-size: 12px; line-height: 1.3; }
+.cmp tbody th { font-weight: 600; white-space: nowrap; }
+.cmp tbody th span { display: block; font: 11px var(--mono); color: var(--muted); font-weight: 400; margin-top: 2px; }
+.cmp .cmp td.na { color: var(--muted); font-size: 11px; }
+.cmp td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 14px; }
+.good { background: var(--good); } .ok { background: var(--ok); } .warn { background: var(--warn); } .bad { background: var(--bad); }
+.note { color: var(--muted); font-size: 13px; max-width: 85ch; line-height: 1.45; margin: 0 0 20px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 12px; font-size: 13px; }
+.legend i { width: 14px; height: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+h2.sec { font-size: 1.05rem; margin: 0 0 4px; }
+.pol { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+.pol h2 { font-size: 15px; margin: 0 0 6px; }
+.pol h2 span { font: 11px var(--mono); color: var(--muted); font-weight: 400; margin-left: 6px; }
+.eps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 640px) { .eps { grid-template-columns: 1fr; } }
+.ep h3 { font-size: 12px; margin: 0 0 4px; font-weight: 600; }
+.ep.breach h3 { color: var(--att); }
+.ep svg { width: 100%; height: auto; display: block; }
+.room { fill: var(--room); stroke: var(--line); }
+.grid { stroke: var(--grid); }
+.wall { stroke: var(--muted); stroke-width: 3; }
+.t10 { fill: var(--def); }
+.ax { fill: var(--muted); font: 10px var(--mono); }
+.goal { fill: var(--goal); fill-opacity: 0.12; stroke: var(--goal); stroke-dasharray: 4 3; }
+.att { fill: none; stroke: var(--att); stroke-width: 2; }
+.def { fill: none; stroke: var(--def); stroke-width: 2; }
+.attdot { fill: var(--att); } .defdot { fill: var(--def); }
+.catch line { stroke: var(--catch); stroke-width: 3; } .breach line { stroke: var(--att); stroke-width: 3; }
+</style>
+<h1>Defense policies compared (spoofed swarm_ops runs)</h1>
+<p class="sub">Each policy file from drive/ running in the hosts' policy runner and telemetry bus on our TELLO-3 map (goal tag 6 at x 0.04, z 6.50). Only the drones and the clock are simulated: rc → velocity at the measured TELLO-7 gain, 0.35 s lag, 0.2 s command delay, 3 cm position noise. Two attackers start at the tag-10 end. Every policy faces the identical 200 episodes per scenario. Cell = share of episodes where an attacker got through (caught = a defender within 0.35 m).</p>
+__TABLE__
+<p class="note"><b>New (top three rows): Mo's ideas added to ours and Shibani's.</b> Each defender now localizes from its own camera and AprilTags (Mo's Eye class, simulated here as the true pose 0.1 s old with 3 cm noise and 10% of frames lost); dead reckoning only bridges gaps. Mo's fallback chaser is on only where it helped (Shibani hard). In the training-like column their simulated camera keeps its 3 cm noise. <b>The messy-drone columns are the closest to real flight; weigh them most.</b> Each drone gets its own stick gain (±30% per axis), a heading error up to ±8°, a slow random drift, and is placed up to ~0.25 m off its start spot. The first columns flatter the dead-reckoning policies (Ours, Shibani), whose estimated positions are exact when nothing is off. Rohan and Mo localize with the cameras, so they shrug these errors off; Mo's fallback chaser then makes the difference. In the realistic Isaac sim our guard scored 35% in the organizers' room, so expect real breaches to be higher than all of these.</p>
+<h2 class="sec">Mo's framework with each tactic (the policy files themselves)</h2>
+<p class="note">Mo's defend.py flow: all 5 drones localize from their own cameras, the file flies 2 scripted attackers straight out from the tag-10 wall, catch at 0.45 m, breach = past the tag-6 line. Each column is that file with a different brain. Only the drones and cameras are simulated (camera = true pose 0.1 s old, 3 cm noise, 10% of frames lost); the harness flies the attackers at the same true speed for all three. Mo's original still has Rohan's 0.008 stick gain, so its defenders fly about 2.6&times; faster than commanded (up to ~2 m/s); the other two use the measured 0.021 and a 0.65 m/s cap.</p>
+<div class="tablewrap"><table class="cmp mof"><thead><tr><th>Attackers (200 episodes each)</th><th>Mo + Rohan's network (original)</th><th>Mo + Shibani hard</th><th>Mo + our guard</th></tr></thead><tbody>
+<tr><th scope="row">0.3 m/s (Mo's default)</th><td class="num good">0.0%</td><td class="num good">0.0%</td><td class="num good">0.0%</td></tr>
+<tr><th scope="row">0.4&ndash;0.9 m/s</th><td class="num good">1.0%</td><td class="num ok">5.0%</td><td class="num good">0.0%</td></tr>
+<tr><th scope="row">0.4&ndash;0.9 m/s, messy drones</th><td class="num ok">3.5%</td><td class="num ok">7.5%</td><td class="num good">0.0%</td></tr>
+<tr><th scope="row">0.8&ndash;1.2 m/s</th><td class="num warn">17.0%</td><td class="num warn">25.5%</td><td class="num good">2.0%</td></tr>
+<tr><th scope="row">0.8&ndash;1.2 m/s, messy drones</th><td class="num warn">22.5%</td><td class="num warn">29.5%</td><td class="num good">1.5%</td></tr>
+</tbody></table></div>
+<p class="note">Folders: drive/defend_policy_mo, drive/defend_policy_mo_shib_hard, drive/defend_policy_mo_ours (no checkpoint needed; Mo's chaser is off by default there because it made no difference: 2.0% / 1.0% with it on).</p>
+<h2 class="sec">The same three fast-attacker episodes, flown by each policy</h2>
+<div class="legend"><span><i style="background:var(--def)"></i>defenders (dot = start)</span><span><i style="background:var(--att)"></i>attackers (dot = start)</span><span><i style="background:var(--catch)"></i>× caught</span><span><i style="background:var(--att)"></i>× breach</span></div>
+__BLOCKS__
