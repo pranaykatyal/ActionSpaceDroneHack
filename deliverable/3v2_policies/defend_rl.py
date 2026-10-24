@@ -15,7 +15,7 @@ last network. Attacker slots are sticky: an attacker keeps its slot while its fi
 empty slot takes the free attacker nearest the goal. The networks see 2 attackers at most.
 
 Environment (besides defend.py's DEFEND_START / DEFEND_HGAIN / DEFEND_SPEED / DEFEND_GOAL_TAG):
-  DEFEND_RL_WEIGHTS=weights/normal_contact_es_g30.npz   (relative to this file, or absolute)
+  DEFEND_RL_WEIGHTS=weights/normal_contact_es_g40.npz   (relative to this file, or absolute)
 Needs numpy and pyyaml.
 """
 import os
@@ -27,7 +27,7 @@ import numpy as np
 from .defend import GAIN, DefendPolicy
 from .defend_net import MAX_LIN_SPEED, SITE_HEIGHT, DefendNets, build_obs, map_to_sim, sim_to_map
 
-DEFAULT_WEIGHTS = "weights/normal_contact_es_g30.npz"
+DEFAULT_WEIGHTS = "weights/normal_contact_es_g40.npz"
 ROLE = ["slot0", "slot1", "keeper"]
 
 

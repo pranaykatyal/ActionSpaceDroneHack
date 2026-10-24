@@ -12,7 +12,8 @@ plugin that plugs them into `defend.py`'s runner code, and an offline check. Non
 
 | Path | What |
 |---|---|
-| `weights/normal_contact_es_g30.pt` | **Flight pick.** skrl IPPO checkpoint, 3 networks (`defender_0..2`). Full-speed contact, no slow-down near the attacker. |
+| `weights/normal_contact_es_g40.pt` | **Flight pick.** skrl IPPO checkpoint, 3 networks (`defender_0..2`). Full-speed contact, no slow-down near the attacker. |
+| `weights/normal_contact_es_g30.pt` | The previous normal-contact pick (same training run, generation 30). |
 | `weights/soft_contact_es_g10.pt` | Best simulation score. Same structure, but trained to slow to 0.15 m/s at contact (see below). |
 | `weights/2v2_soft_guard_es_g20.pt` | The 2v2 submission (2 networks), in case you test with 2 defenders. |
 | `weights/*.npz` | The same networks as plain numpy arrays (made by `export_npz.py`), so the laptop needs no torch. |
@@ -30,14 +31,15 @@ The hosts' `scripts/evaluate.py --checkpoint` loads them directly.
 
 ## Which network to fly
 
-- **`normal_contact_es_g30`** flies straight into the attacker at full speed. The organizers count a real
+- **`normal_contact_es_g40`** flies straight into the attacker at full speed. The organizers count a real
   capture only when the attacker falls out of the air, and a soft 0.15 m/s bump probably won't
-  knock a Tello down. This is the one to fly. In sim it breaches 6.4% of episodes.
+  knock a Tello down. This is the one to fly. In sim it breaches 4.9% of episodes (24.7% against
+  weaving attackers).
 - **`soft_contact_es_g10`** scores best in sim (1.2–2.2% breach) because the sim counts any approach
   within 0.35 m as a capture, and in this sim a fast hit flips the defender for good. Keep it as a
   comparison, not as the flight network.
-- Normal-contact ES generation 40 was still being scored when this was packaged. If it beats g30,
-  it will replace it here.
+- `normal_contact_es_g30` (6.4%) is the generation before it, kept in case g40 misbehaves; the
+  difference is about 1.5 standard errors on 1,000 episodes each.
 
 ## Results (simulation)
 
@@ -53,7 +55,8 @@ attackers respawn in waves during an episode, so it goes above 100%.
 | normal contact, distilled (no ES) | 100 × 1000 | 257.2% | 25.5% |
 | normal contact, ES gen 10 | 100 × 1000 | 312.7% | 11.2% |
 | normal contact, ES gen 20 | 100 × 1000 | 333.6% | 7.3% |
-| **normal contact, ES gen 30 (flight pick)** | 100 × 1000 | 342.9% | **6.4%** |
+| normal contact, ES gen 30 | 100 × 1000 | 342.9% | 6.4% |
+| **normal contact, ES gen 40 (flight pick)** | 100 × 1000 | 347.3% | **4.9%** |
 | soft contact, distilled (no ES) | 100 × 1000 | 364.1% | 5.5% |
 | **soft contact, ES gen 10** | 100 × 1000 | 379.6% | **1.2%** |
 | soft contact, ES gen 10 | 128 × 1000 | 378.1% | 2.2% |
@@ -66,8 +69,19 @@ The `*_64x20.log` files in `results/eval_3v2/` are `evaluate.py`'s defaults. The
 episodes, which are mostly the early breaches, so don't quote them.
 
 Harder attackers, `Team1-Defend-3v2-Realistic-v0` (70% weave, heading wobble, 0.2–1.0 m/s), 64 × 640:
-`chase` 92.2% breach, no defense 98.6%, normal contact gen 15 29.7%. Weaving attackers are the
-main weakness of the normal-contact network. Gen 30/40 and the soft network on this task were still scoring.
+
+| network | interception | breach |
+|---|---|---|
+| no defense | 6.2% | 98.6% |
+| hosts' `chase` | 68.7% | 92.2% |
+| normal contact, ES gen 15 | 252.0% | 29.7% |
+| normal contact, ES gen 30 | 259.5% | 27.2% |
+| **normal contact, ES gen 40 (flight pick)** | 267.1% | **24.7%** |
+| **soft contact, ES gen 10** | 336.0% | **3.3%** |
+
+Weaving attackers are the main weakness of the normal-contact network: a full-speed pass at a
+weaving target misses more often and leaves the defender out of position. The soft network shadows
+the attacker before contact, so weaving barely hurts it (but its gentle contact may not drop a real Tello).
 
 Crashes (`results/crash_3v2/`, ~256 episodes, time defenders spend on the floor): soft ES gen 15
 1.3%, soft distilled 2.7%, normal distilled 32.7%, `chase` 6.1%. In this sim a hard hit tips a
@@ -127,7 +141,7 @@ python swarm_policies.py --run defend_rl:6,7,8 --run formation:4,5 --fly
 DEFEND_RL_WEIGHTS=weights/soft_contact_es_g10.npz python swarm_policies.py ...   # other network
 ```
 
-Environment variables: `DEFEND_RL_WEIGHTS` (default `weights/normal_contact_es_g30.npz`, relative
+Environment variables: `DEFEND_RL_WEIGHTS` (default `weights/normal_contact_es_g40.npz`, relative
 to `defend_rl.py` or absolute), plus defend.py's `DEFEND_START`, `DEFEND_HGAIN`, `DEFEND_SPEED`,
 `DEFEND_GOAL_TAG`.
 
@@ -234,7 +248,7 @@ above don't use them.
 
 ```python
 import torch
-ck = torch.load("weights/normal_contact_es_g30.pt", map_location="cpu", weights_only=False)
+ck = torch.load("weights/normal_contact_es_g40.pt", map_location="cpu", weights_only=False)
 # ck["defender_i"]["policy"]: net_container.{0,2,4}.{weight,bias}, policy_layer.{weight,bias}, log_std_parameter
 # ck["defender_i"]["observation_preprocessor"]: running_mean, running_variance, current_count
 ```
