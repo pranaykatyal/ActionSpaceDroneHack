@@ -42,6 +42,7 @@ sys.path.insert(0, str(HERE))
 
 from tello_calibration.calib.io import camera_from_dict, load_yaml  # noqa: E402
 from tello_calibration.tags.detect import TagDetector, load_tag_config  # noqa: E402
+from tello_calibration.tags.mapping import TagMap, invert  # noqa: E402
 from tello_calibration.utils.config import CONFIG_DIR  # noqa: E402
 from tello_check import TELLO_IP, join, local_ip_toward_tello  # noqa: E402
 
@@ -80,7 +81,8 @@ def main() -> int:
     ap.add_argument("--camera", type=Path, help="default: config/camera/<drone>.yaml")
     ap.add_argument("--checkpoint", type=Path, default=HERE / "policies/hover_real_R1.npz")
     ap.add_argument("--standoff", type=float, default=0.5, help="hover this far in front of the tag [m]")
-    ap.add_argument("--height", type=float, default=1.0, help="search height above the floor [m]")
+    ap.add_argument("--height", type=float, default=1.0, help="search height for a tag not in the map [m]")
+    ap.add_argument("--map", type=Path, default=CONFIG_DIR / "map.yaml", help="room map: search height and bearing from any seen tag")
     ap.add_argument("--hold", type=float, default=8.0, help="seconds to hold at each stand-off")
     ap.add_argument("--tol", type=float, default=0.10, help="counts as arrived within this [m]")
     ap.add_argument("--act-scale", type=float, default=0.3, help="m/s at action 1 (the Real task's speed)")
@@ -120,9 +122,23 @@ def main() -> int:
         standoffs.append(max(args.standoff, round(fit, 2)))
         if fit > args.standoff:
             print(f"tag {tag} ({tags.size_m(tag) * 1000:.0f} mm) needs {fit:.2f} m to fit the image: stand-off {fit:.2f} m", flush=True)
+    # the room map: each target's height (search at it, so the tag is in the image) and, from a
+    # sighting of any mapped tag, where the target is (turn straight to it instead of spinning)
+    room = TagMap.load(args.map) if args.map.exists() else None
+    floor_y = None
+    if room:
+        floor = [M[1, 3] for M in room.poses.values() if abs(M[1, 2]) > 0.8]  # face normal up = floor tag
+        floor_y = float(np.median(floor)) if floor else None
+
+    def search_height(tag):
+        if room is None or floor_y is None or tag not in room.poses:
+            return args.height
+        return float(np.clip(room.poses[tag][1, 3] - floor_y, 0.5, args.ceiling - 0.2))
+
     leg = 0
     target, standoff = route[0], standoffs[0]
-    print(f"route {route}, stand-offs {standoffs} m", flush=True)
+    print(f"route {route}, stand-offs {standoffs} m, search heights "
+          f"{[round(search_height(t), 2) for t in route]} m" + ("" if room else " (no map)"), flush=True)
     policy = NumpyPolicy(args.checkpoint)
 
     from djitellopy import Tello
@@ -153,8 +169,9 @@ def main() -> int:
 
     flying = False
     phase, phase_t = "SEARCH", time.time()
-    z_goal = args.height
+    z_goal = search_height(target)
     seen_t, held_since = 0.0, None
+    pred_fixed = None  # last map prediction of the target: (xy in the takeoff-yaw frame, up, time)
     track: list[tuple[float, np.ndarray]] = []  # (t, tag position in the takeoff-yaw frame) for velocity
     z_hist: list[tuple[float, float]] = []
     t_start, last_print, last_tof_ok, period = time.time(), 0.0, time.time(), 1.0 / args.hz
@@ -183,12 +200,26 @@ def main() -> int:
             vz = (z_hist[-1][1] - z_hist[0][1]) / max(z_hist[-1][0] - z_hist[0][0], 1e-3) if len(z_hist) > 1 else 0.0
 
             frame = frames.frame
-            obs_tag = None
+            obs_tag, other = None, None
             if frame is not None:
                 gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
                 for o in detector.detect(gray):
-                    if o.tag_id == target and o.accepted and o.tvec is not None:
+                    if not (o.accepted and o.tvec is not None):
+                        continue
+                    if o.tag_id == target:
                         obs_tag = o
+                    elif room and o.tag_id in room.poses and (other is None or o.side_px > other.side_px):
+                        other = o  # the biggest mapped tag in view: the most reliable pose
+            # where the target should be, from the map and another tag in view (camera frame)
+            predicted_b = None
+            if obs_tag is None and other is not None and target in room.poses:
+                m_origin_cam = room.camera_pose(other)
+                p = (invert(m_origin_cam) @ room.poses[target][:, 3])[:3]  # x right, y down, z forward
+                predicted_b = np.array([p[2], -p[0], -p[1]])
+                pred_fixed = (rot(-yaw) @ predicted_b[:2], predicted_b[2], t0)
+            elif obs_tag is None and pred_fixed is not None and t0 - pred_fixed[2] < 15.0:
+                # no mapped tag in view any more (it turned away from them): keep the remembered direction
+                predicted_b = np.array([*(rot(yaw) @ pred_fixed[0]), pred_fixed[1]])
             tag_b = None
             if obs_tag is not None:
                 x, y, zc = obs_tag.tvec  # camera: x right, y down, z forward
@@ -205,6 +236,7 @@ def main() -> int:
                     print(f"tag {target} found at {np.linalg.norm(tag_b[:2]):.2f} m: APPROACH", flush=True)
             elif phase != "SEARCH" and t0 - seen_t > 2.0:
                 phase, phase_t, held_since, track = "SEARCH", t0, None, []
+                z_goal = search_height(target)
                 print("tag lost for 2 s: SEARCH", flush=True)
             if phase == "SEARCH" and t0 - phase_t > args.search_time:
                 print(f"tag {target} not found in {args.search_time:.0f} s: landing", flush=True)
@@ -220,6 +252,11 @@ def main() -> int:
             yaw_rc = 0
             if phase == "SEARCH":
                 yaw_rc = args.search_yaw
+                if predicted_b is not None:  # turn the short way to where the map says it is
+                    bearing = math.degrees(math.atan2(-predicted_b[1], predicted_b[0]))
+                    yaw_rc = int(np.clip(args.yaw_gain * bearing, -args.search_yaw, args.search_yaw))
+                    if abs(bearing) < 10:
+                        yaw_rc = 0  # facing it: hold here and let the camera find it
             elif tag_b is not None:
                 rng = float(np.linalg.norm(tag_b[:2]))
                 goal_xy = tag_b[:2] * (1.0 - standoff / max(rng, 1e-3))  # stop short on the line of sight
@@ -241,6 +278,8 @@ def main() -> int:
                         break
                     target, standoff = route[leg], standoffs[leg]
                     phase, phase_t, held_since, track, seen_t = "SEARCH", t0, None, [], 0.0
+                    pred_fixed = None
+                    z_goal = search_height(target)
                     print(f"held: next goal tag {target}: SEARCH", flush=True)
                     continue
             if z is not None:
@@ -261,10 +300,13 @@ def main() -> int:
 
             log.write(json.dumps({"kind": "ctl", "t": t0, "phase": phase, "target": target, "z": z, "z_goal": round(z_goal, 3),
                                   "tag_b": None if tag_b is None else tag_b.round(3).tolist(),
-                                  "goal_b": err.round(3).tolist(), "v_b": v_b.round(3).tolist(), "vz": round(vz, 3),
+                                  "goal_b": err.round(3).tolist(),
+                                  "pred_b": None if predicted_b is None else predicted_b.round(3).tolist(),
+                                  "via": None if other is None else other.tag_id, "v_b": v_b.round(3).tolist(), "vz": round(vz, 3),
                                   "act": act.round(4).tolist(), "rc": rc, "state": state}) + "\n")
             if t0 - last_print > 0.5:
-                where = "no tag" if tag_b is None else (f"tag fwd {tag_b[0]:+.2f} left {tag_b[1]:+.2f} up {tag_b[2]:+.2f}")
+                where = ("no tag" if predicted_b is None else
+                         f"via {'tag ' + str(other.tag_id) if other else 'memory'}: target {target} at fwd {predicted_b[0]:+.2f} left {predicted_b[1]:+.2f} up {predicted_b[2]:+.2f}") if tag_b is None else (f"tag fwd {tag_b[0]:+.2f} left {tag_b[1]:+.2f} up {tag_b[2]:+.2f}")
                 print(f"{phase:8s} [{target}] {where}  z {z}  -> err {err.round(2).tolist()}  rc {rc}", flush=True)
                 last_print = t0
             if not args.no_window and frame is not None:
