@@ -129,7 +129,13 @@ class Track:
     def update(self, pos: np.ndarray, heading: float | None, t_meas: float, key=None) -> None:
         # The same old pose comes back in every datagram until a new one is measured; its
         # t - age wobbles by +-5 ms from rounding, so compare the pose itself, not the time.
-        if key is not None and key == self.key or t_meas <= self.t + 0.02:
+        if key is not None and key == self.key:
+            # Same values: either the old pose repeated (t_meas stays put, so it goes stale as it
+            # should) or a new identical measurement of a still drone (t_meas moves on: fresh).
+            # Neither carries motion, so the velocity is left alone.
+            self.t = max(self.t, t_meas)
+            return
+        if t_meas <= self.t + 0.02:
             return
         self.key = key
         if self.pos is not None:
