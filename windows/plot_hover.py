@@ -13,7 +13,8 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", required=True, help="skrl checkpoint (best_agent.pt)")
-parser.add_argument("--num_envs", type=int, default=8)
+parser.add_argument("--num_envs", type=int, default=512, help="drones scored (same seeded starts for every pilot)")
+parser.add_argument("--show", type=int, default=8, help="drones drawn in the plot and video")
 parser.add_argument("--out", default="outputs/hover_policy.png")
 parser.add_argument("--video", nargs="?", const="outputs/hover_policy.mp4", default=None,
                     help="also render an animated mp4 (default path outputs/hover_policy.mp4)")
@@ -52,7 +53,11 @@ def load_policy(path, device):
 
 
 def rollout(env, pilot, seed):
-    """One full episode from a seeded reset: (positions [T,N,3], goals [N,3], distances [T,N], died [N])."""
+    """One full episode from a seeded reset.
+
+    Returns (positions [T,N,3], goals [N,3], distances [T,N], died [N], returns [N]); a drone's return
+    stops accumulating when it dies, the same as the episode return in training.
+    """
     torch.manual_seed(seed)
     obs, _ = env.reset(seed=seed)
     obs = obs["policy"]
@@ -60,6 +65,7 @@ def rollout(env, pilot, seed):
     origins = u.scene.env_origins
     goals = (u._goal_pos_w - origins).clone()
     alive = torch.ones(u.num_envs, dtype=torch.bool, device=u.device)
+    ret = torch.zeros(u.num_envs, device=u.device)
     pos, dist = [], []
     for _ in range(int(u.max_episode_length) - 2):  # stop before the time-out reset re-samples goals
         p = u._robot.data.root_pos_w - origins
@@ -67,10 +73,11 @@ def rollout(env, pilot, seed):
         nan = torch.full_like(p, float("nan"))
         pos.append(torch.where(alive[:, None], p, nan).cpu())
         dist.append(torch.where(alive, d, torch.full_like(d, float("nan"))).cpu())
-        obs, _, term, _, _ = env.step(pilot(obs))
+        obs, rew, term, _, _ = env.step(pilot(obs))
         obs = obs["policy"]
+        ret += torch.where(alive, rew, torch.zeros_like(rew))
         alive &= ~term
-    return torch.stack(pos), goals.cpu(), torch.stack(dist), (~alive).cpu()
+    return torch.stack(pos), goals.cpu(), torch.stack(dist), (~alive).cpu(), ret.cpu()
 
 
 cfg = parse_env_cfg("AS-Tello-Hover-v0", device=args_cli.device, num_envs=args_cli.num_envs)
@@ -89,7 +96,8 @@ with torch.inference_mode():
 
 fig = plt.figure(figsize=(15, 9))
 colors = plt.cm.tab10.colors
-pos, goals, _, died = runs["trained policy"]
+show = min(args_cli.show, args_cli.num_envs)
+pos, goals = runs["trained policy"][0][:, :show], runs["trained policy"][1][:show]
 
 ax = fig.add_subplot(2, 3, 1)  # top view
 for i in range(pos.shape[1]):
@@ -119,12 +127,13 @@ ax.set(title="Trained policy, 3D", xlabel="x", ylabel="y", zlabel="z")
 
 ax = fig.add_subplot(2, 1, 2)  # distance to goal, all pilots
 styles = {"trained policy": "-", "do nothing": ":", "P-controller": "--"}
-for name, (_, _, dist, dead) in runs.items():
+for name, (_, _, dist, dead, ret) in runs.items():
     t = torch.arange(dist.shape[0]) * dt
     mean = torch.nanmean(dist, dim=1)
-    ax.plot(t, mean, styles[name], lw=2.5, label=f"{name} (mean)  final {mean[-1]*100:.1f} cm, crashed {int(dead.sum())}/{dist.shape[1]}")
+    ax.plot(t, mean, styles[name], lw=2.5, label=f"{name}: return {ret.mean():.1f}, final {mean[-1]*100:.1f} cm, "
+            f"crashed {int(dead.sum())}/{dist.shape[1]}")
     if name == "trained policy":
-        for i in range(dist.shape[1]):
+        for i in range(show):
             ax.plot(t, dist[:, i], color=colors[i % 10], lw=0.8, alpha=0.5)
 ax.set(title="Distance to goal over one 10 s episode (same starts for every pilot)", xlabel="time [s]",
        ylabel="distance to goal [m]")
@@ -135,9 +144,11 @@ ax.grid(alpha=0.3)
 fig.tight_layout()
 fig.savefig(args_cli.out, dpi=110)
 print(f"[plot] wrote {args_cli.out}", flush=True)
-for name, (_, _, dist, dead) in runs.items():
+for name, (_, _, dist, dead, ret) in runs.items():
     mean = torch.nanmean(dist, dim=1)
-    print(f"[plot] {name:15s} start {mean[0]*100:5.1f} cm -> 1 s {mean[int(1/dt)]*100:5.1f} cm -> end {mean[-1]*100:5.1f} cm, crashed {int(dead.sum())}", flush=True)
+    print(f"[plot] {name:15s} return {ret.mean():6.2f} +- {ret.std():4.2f} | distance start {mean[0]*100:5.1f} cm "
+          f"-> 1 s {mean[int(1/dt)]*100:5.1f} -> 3 s {mean[int(3/dt)]*100:5.1f} -> end {mean[-1]*100:5.1f} cm "
+          f"| crashed {int(dead.sum())}/{dist.shape[1]}", flush=True)
 
 
 def render_video(path, fps=30):
@@ -146,7 +157,7 @@ def render_video(path, fps=30):
     from matplotlib.animation import FFMpegWriter, FuncAnimation
 
     plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
-    pos, goals, _, _ = runs["trained policy"]
+    pos, goals = runs["trained policy"][0][:, :show], runs["trained policy"][1][:show]
     n_steps, n = pos.shape[0], pos.shape[1]
     stride = max(1, round(1 / (dt * fps)))  # policy runs at 60 Hz; one video frame per `stride` steps
     t_all = torch.arange(n_steps) * dt
@@ -164,7 +175,7 @@ def render_video(path, fps=30):
 
     axd = vfig.add_subplot(1, 2, 2)
     curves = {}
-    for name, (_, _, dist, dead) in runs.items():
+    for name, (_, _, dist, _, _) in runs.items():
         mean = torch.nanmean(dist, dim=1)
         axd.plot(t_all, mean, styles[name], lw=1, alpha=0.25, color="gray")
         curves[name] = (mean, axd.plot([], [], styles[name], lw=2.5, label=name)[0])
