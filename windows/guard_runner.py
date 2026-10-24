@@ -166,6 +166,7 @@ class GuardPilot:
         self.goal = map_to_guard(C_FLIP @ goal, args.tag10_height)
         self.goal[2] = max(self.goal[2], args.min_height)
         self.tracks: dict[str, Track] = {}
+        self.floor_since: dict[str, float] = {}  # attacker name -> when it was first seen down
         self.guard = None
         self.num_attackers = -1
         fit = yaml.safe_load(MOTION_FIT.read_text())["channels"]
@@ -200,6 +201,19 @@ class GuardPilot:
             key = (pose["tag"], tuple(pose["xyz"]), pose.get("yaw"))
             self.tracks.setdefault(d["name"], Track()).update(pos, heading, msg["t"] - pose.get("age", 0.0), key)
 
+    def is_out(self, d: dict, now: float) -> bool:
+        """Telemetry has no "crashed" or "dismissed" flag. After an impact the firmware cuts the
+        motors but drone_gui keeps fly=True, so also call it out when it sits at the floor without
+        moving for a while. Revocable: it counts again as soon as it climbs or takes off."""
+        if not d.get("link", True) or not d.get("fly"):
+            return True
+        tof, vel = d.get("tof"), d.get("vel") or [0.0, 0.0, 0.0]
+        on_floor = tof is not None and tof <= 0.15 and float(np.linalg.norm(vel)) < 0.1
+        if not on_floor:
+            self.floor_since.pop(d["name"], None)
+            return False
+        return now - self.floor_since.setdefault(d["name"], now) > 0.7
+
     def home(self, i: int, n: int) -> np.ndarray:
         """Waiting spot: between the goal and tag 10, spread across the attackers' lane."""
         to_wall = np.array([-self.goal[0], -self.goal[1], 0.0])
@@ -218,7 +232,8 @@ class GuardPilot:
         defenders = [n for n in a.defenders if n in by_name]
         attackers = [
             d["name"] for d in msg["drones"]
-            if d["team"] == "attack" and d.get("fly") and d["name"] in self.tracks and now - self.tracks[d["name"]].t < 2.0
+            if d["team"] == "attack" and not self.is_out(d, now)
+            and d["name"] in self.tracks and now - self.tracks[d["name"]].t < 2.0
         ]
         out = {n: None for n in defenders}
         live = [n for n in defenders if fresh(n)]
