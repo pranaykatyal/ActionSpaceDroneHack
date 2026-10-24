@@ -227,3 +227,138 @@ for _id, _entry, _cfg in [
             "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
         },
     )
+
+# three defenders vs two realistic attackers on the official geometry (team1_defend_3v2_realistic_env_cfg.py)
+gym.register(
+    id="Team1-Defend-3v2-Realistic-v0",
+    entry_point=f"{__name__}.team1_defend_shaped_env:Team1DefendRealisticEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.team1_defend_3v2_realistic_env_cfg:Team1Defend3v2RealisticEnvCfg",
+        "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+        "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+    },
+)
+
+# only frame contact counts as a capture (0.12 m centre to centre), everything else official (team1_defend_touch_env_cfg.py)
+for _id, _cfg in [
+    ("Team1-Defend-Touch-v0", "Team1DefendTouchEnvCfg"),
+    ("Team1-Defend-3v2-Touch-v0", "Team1Defend3v2TouchEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point="action_space_kit.tasks.direct.tello_defend.tello_defend_env:TelloDefendEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.team1_defend_touch_env_cfg:{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )
+
+# the asset the policy sees = centre of the defenders' start positions (team1_defend_startsite_env.py)
+for _id, _cfg in [
+    ("Team1-Defend-StartSite-v0", "Team1DefendStartSiteEnvCfg"),
+    ("Team1-Defend-StartSite-Even-v0", "Team1DefendStartSiteEvenEnvCfg"),
+    ("Team1-Defend-3v2-StartSite-v0", "Team1Defend3v2StartSiteEnvCfg"),
+    ("Team1-Defend-3v2-StartSite-Even-v0", "Team1Defend3v2StartSiteEvenEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point=f"{__name__}.team1_defend_startsite_env:Team1DefendStartSiteEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.team1_defend_startsite_env:{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )
+
+# 3v2 in the real room from the organizers' map.yaml (team1_defend_room_env.py)
+for _id, _env, _cfg in [
+    ("Team1-Defend-3v2-Room-v0", "Team1DefendRoomEnv", "Team1Defend3v2RoomEnvCfg"),
+    ("Team1-Defend-3v2-Room-Realistic-v0", "Team1DefendRoomRealisticEnv", "Team1Defend3v2RoomRealisticEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point=f"{__name__}.team1_defend_room_env:{_env}",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.team1_defend_room_env:{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )
+
+# 3v2 versions of the sim-to-real variants (team1_defend_3v2_sim2real_env_cfg.py)
+for _id, _entry, _cfg in [
+    ("Team1-Defend-3v2-IRL-v0", "team1_defend_env:Team1DefendIRLEnv", "Team1Defend3v2IRLEnvCfg"),
+    ("Team1-Defend-3v2-FittedT024-v0", "team1_defend_deploy_env:Team1DefendFittedDeployEnv", "Team1Defend3v2FittedT024EnvCfg"),
+    ("Team1-Defend-3v2-FittedT024-Spawn6-v0", "team1_defend_deploy_env:Team1DefendFittedDeployEnv", "Team1Defend3v2FittedT024Spawn6EnvCfg"),
+    ("Team1-Defend-3v2-FittedT024-Spawn6-PredictCVSep-v0", "team1_defend_deploy_env:Team1DefendFittedDeployEnv", "Team1Defend3v2FittedT024Spawn6PredictCVSepEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point=f"{__name__}.{_entry}",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.team1_defend_3v2_sim2real_env_cfg:{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )
+
+# the 3v2 room tasks on the user's own tag map (team1_defend_room_usermap_env_cfg.py)
+for _id, _env, _cfg in [
+    ("Team1-Defend-3v2-Room-UserMap-v0", "Team1DefendRoomEnv", "Team1Defend3v2RoomUserMapEnvCfg"),
+    ("Team1-Defend-3v2-Room-UserMap-Realistic-v0", "Team1DefendRoomRealisticEnv", "Team1Defend3v2RoomUserMapRealisticEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point=f"{__name__}.team1_defend_room_env:{_env}",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.team1_defend_room_usermap_env_cfg:{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )
+
+# the official 3v2 task flown by the submission's real-drone runner, final_submission/policy/defend.py
+# (Mo's runner + Team 1's intercept guard + fallback chaser; team1_defend_morunner_env.py)
+gym.register(
+    id="Team1-Defend-3v2-MoRunner-v0",
+    entry_point=f"{__name__}.team1_defend_morunner_env:Team1DefendMoRunnerEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.team1_defend_morunner_env:Team1Defend3v2MoRunnerEnvCfg",
+        "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+        "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+    },
+)
+
+# the other 3v2 tasks flown by the same runner (team1_defend_morunner_env.py): weaving attackers, the room on the
+# user's map, and the room with weaving attackers
+for _id, _env, _cfg in [
+    ("Team1-Defend-3v2-Realistic-MoRunner-v0", "Team1DefendMoRunnerRealisticEnv", "team1_defend_3v2_realistic_env_cfg:Team1Defend3v2RealisticEnvCfg"),
+    ("Team1-Defend-3v2-Room-UserMap-MoRunner-v0", "Team1DefendMoRunnerRoomEnv", "team1_defend_room_usermap_env_cfg:Team1Defend3v2RoomUserMapEnvCfg"),
+    ("Team1-Defend-3v2-Room-UserMap-Realistic-MoRunner-v0", "Team1DefendMoRunnerRoomRealisticEnv", "team1_defend_room_usermap_env_cfg:Team1Defend3v2RoomUserMapRealisticEnvCfg"),
+]:
+    gym.register(
+        id=_id,
+        entry_point=f"{__name__}.team1_defend_morunner_env:{_env}",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.{_cfg}",
+            "skrl_cfg_entry_point": f"{defend_agents.__name__}:skrl_ppo_cfg.yaml",
+            "skrl_ippo_cfg_entry_point": f"{defend_agents.__name__}:skrl_ippo_cfg.yaml",
+            "skrl_mappo_cfg_entry_point": f"{defend_agents.__name__}:skrl_mappo_cfg.yaml",
+        },
+    )

@@ -26,6 +26,8 @@ parser.add_argument("--capture_every", type=int, default=3, help="Env steps (1/6
 parser.add_argument("--ticks_per_capture", type=int, default=3)
 parser.add_argument("--fps", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
+parser.add_argument("--eye", type=float, nargs=3, default=None, help="camera position (world); default: the arena view, or a side view of the room on room tasks")
+parser.add_argument("--lookat", type=float, nargs=3, default=None, help="camera target (world)")
 parser.add_argument("--out", type=str, required=True)
 parser.add_argument("--frame_dir", type=str, required=True)
 args, _ = parser.parse_known_args()
@@ -75,7 +77,48 @@ label = args.label or (os.path.basename(args.checkpoint) if args.checkpoint else
 
 obs, _ = env.reset()
 viewport = get_active_viewport()
-env.sim.set_camera_view(eye=[6.5, 6.5, 6.0], target=[0.0, 0.0, 0.8])
+eye, lookat = [6.5, 6.5, 6.0], [0.0, 0.0, 0.8]
+room_points = None
+if hasattr(env, "_ensure_room"):
+    # room tasks (team1_defend_room_env.py): outline the room and look at it from beside the left wall
+    env._ensure_room()
+    lo, hi, site = env._room_lo.tolist(), env._room_hi.tolist(), env._room_site.tolist()
+    origin = env.scene.env_origins[0].tolist()
+
+    def to_world(p):
+        return [origin[0] + p[0] - site[0], origin[1] + p[1] - site[1], origin[2] + p[2]]
+
+    mid_x, mid_y = 0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])
+    eye, lookat = to_world([mid_x, lo[1] - 6.5, 6.0]), to_world([mid_x, mid_y, 0.5])
+    pts = []
+    for i in range(int((hi[0] - lo[0]) / 0.25) + 1):  # floor edges along X
+        x = lo[0] + 0.25 * i
+        pts += [to_world([x, lo[1], 0.02]), to_world([x, hi[1], 0.02])]
+    for i in range(int((hi[1] - lo[1]) / 0.25) + 1):  # floor edges along Y
+        y = lo[1] + 0.25 * i
+        pts += [to_world([lo[0], y, 0.02]), to_world([hi[0], y, 0.02])]
+    for x, y in ((lo[0], lo[1]), (lo[0], hi[1]), (hi[0], lo[1]), (hi[0], hi[1])):  # corner posts up to the ceiling
+        pts += [to_world([x, y, 0.25 * k]) for k in range(int(hi[2] / 0.25) + 1)]
+    room_points = torch.tensor(pts, device=env.device)
+    tag10 = torch.tensor([to_world([lo[0] + 0.1, 0.0, env._rcfg("tag10_height")])], device=env.device)
+    room_marks = VisualizationMarkers(
+        VisualizationMarkersCfg(
+            prim_path="/Visuals/team1_room",
+            markers={
+                "edge": sim_utils.SphereCfg(radius=0.03, visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.75, 0.75))),
+                "tag10": sim_utils.CuboidCfg(size=(0.05, 0.57, 0.57), visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.95, 0.95, 0.95))),
+            },
+        )
+    )
+    room_marks.visualize(
+        torch.cat([room_points, tag10]),
+        marker_indices=torch.cat([torch.zeros(len(room_points), dtype=torch.long), torch.ones(1, dtype=torch.long)]).to(env.device),
+    )
+if args.eye is not None:
+    eye = list(args.eye)
+if args.lookat is not None:
+    lookat = list(args.lookat)
+env.sim.set_camera_view(eye=eye, target=lookat)
 
 
 def _mat(color):

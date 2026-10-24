@@ -747,7 +747,14 @@ Teacher (`--check assigned --contact_offset 0 --soft_closing 0.15`, 64 × 640, c
 | keeper 1.8/1.5 + guard 1.8/1.0 | 347.8% | 13.3% | 6.4% |
 | **keeper 1.6/1.5 + guard 2.2/1.5** | **358.2%** | **10.1%** | 4.4% |
 
+| keeper 1.6/1.5 + guard 2.2/1.0 | 356.5% | 9.6% | 4.3% |
+| keeper 1.6/1.0 + guard 2.2/1.5 | 362.3% | 7.5% | 2.7% |
+| keeper 1.6, never engages, + guard 2.2/1.5 | 367.1% | 5.6% | 2.5% |
+| **keeper 1.6/0.8 + guard 2.2/1.5 (chosen)** | **366.6%** | **4.1%** | 2.1% |
+
 - Double-teaming crashes constantly. Separating the keeper's post from the guard post helps.
+- **Late engagement fixes the keeper:** engaging at 0.8 s before breach instead of 1.5 s cuts breaches 10.1% → 4.1% and floor time 4.4% → 2.1%. A keeper that never engages (5.6%) still beats an early one, so most of its value is being in the way.
+- The user asked for soft vs normal contact on 3v2: both versions of the chosen teacher are distilled (`outputs/distill_3v2_soft.log`, `outputs/distill_3v2_hard.log`), then ES on each, all scored with the hosts' `evaluate.py --task Team1-Defend-3v2-v0`.
 - Three defenders still do worse than the 2v2 teacher (1.2–4.4%): the extra drone adds crashes near the asset.
 - **Organizers' real capture rule (user, same day): the attacker has to fall out of the air.** The sim counts any approach within 0.35 m and the "downed" attacker hovers, so sim captures overstate real ones; a 0.15 m/s soft bump probably won't drop a Tello. This run still trains the intercept under delay and the 0.75 m/s cap; its capture numbers are sim-rule only. Proposed: a laptop-side ram override for the last ~0.7 m (not scorable in this sim: the thrust bug flips every rammer), with the ram speed set by a real test (one defender vs a hovering Tello at 0.3 / 0.5 / 0.75 m/s). The scripted hybrid (`control/defense.py`, `contact_offset` 0) already flies straight in.
 - Progress: center breach 39.5% (gen 1) → 34.4% (gen 5) → 33.6% (gen 10); 256 episodes each, ±3 points.
@@ -765,3 +772,121 @@ Teacher (`--check assigned --contact_offset 0 --soft_closing 0.15`, 64 × 640, c
 - Queued (GPU full of peer runs): no-slow-down teacher (`--check assigned --contact_offset 0 --guard 1.8 1.5`, no `--soft_closing`) on AS-Defend-v0 and FittedT024-Spawn6-PredictCVSep, 64 × 640, logs `simulation_infra/outputs/noslow/`. Known risk: the captured attacker hovers and a fast hit flips the defender for good (thrust bug), so the sim punishes not slowing down (pre-guard hard-contact teacher: 98.8% breach).
 - **Retrain without the slow-down (user: "cancel and retrain")**: teacher checks cancelled. Chain (`simulation_infra/outputs/noslow/`): `distill.py --task Team1-Defend-FittedT024-Spawn6-PredictCVSep-v0 --teacher assigned --contact_offset 0 --guard 1.8 1.5` (guard network's settings minus `--soft_closing`; fresh network, 12 DAgger rounds) → `es_train.py` on the same task from the distilled checkpoint, guard recipe, 60 generations, `--name noslow`. Starts when ≥ 4 GB of GPU memory is free.
 - **Switched to the official task (user: "i just want the behaviour the repo expects").** The flight-variant distill was stopped at round 3. The README's expected behaviour is pursuit into the attacker (`chase`), capture within 0.35 m, and its suggested levers are assigned targets, staying between attacker and site (our guard) and a behaviour-cloning warm start. Soft contact was ours, not the repo's. New chain (`simulation_infra/outputs/noslow_official/`): `distill.py --task AS-Defend-v0 --teacher assigned --contact_offset 0 --guard 1.8 1.5` (no `--soft_closing`) → `es_train.py --task AS-Defend-v0` from it, guard recipe, 60 generations, `--name noslow_official`. Scored with the hosts' `evaluate.py` on AS-Defend-v0 against guard gen 20.
+- Distilled no-slow-down network: `2026-10-24_09-45-54_distill_assigned_441697/checkpoints/agent_distill.pt` (copy mse 0.0031). Last DAgger round 14.5 captures / 4.5 breaches per min, against 24.3 / 0.15 for the soft-contact copy (`07-35-49_distill_assigned_363220`). ES from it is next.
+- **Soft contact, continued (user asked for both):**
+  - Scoring the never-scored soft-contact guard ES checkpoints, gens 25–60 (`es_guard_s003`), with `evaluate.py` 100 × 1,000 (same scenarios as gen 20's 1.5%), logs `simulation_infra/outputs/soft_more/guard_g*_100x1000.log`. The best of eight on one set is optimistic, so a winner gets confirmed on 128 × 1,000 and 200 × 1,000.
+  - Resumed the soft-contact flight run (`es_flight_g20`, 6 m flight variant) from its gen-10 `es_state.pt` for 50 more generations, `--name flight_g20_resume`, log `simulation_infra/outputs/soft_more/flight_resume.log`.
+
+### Real Tello command rate (new `team1_defend_rate_env.py`: official task, only the command rate changed)
+
+Each sent command is held until the next packet, with a phase accumulator keeping the average rate exact. Guard gen 20, hosts' `evaluate.py --task`, 64 × 640:
+
+| task | interception | breach |
+|---|---|---|
+| `Team1-Defend-Rate135-v0` (13.5 Hz, as measured in flight) | 387.0% | 2.7% |
+| `Team1-Defend-Rate10-v0` (10 Hz) | 386.8% | 3.6% |
+
+- The real rc rate costs about a point (official 1.5–2.5% at 60 Hz). The network has no memory and outputs velocity setpoints, so holding them for 74 ms is benign.
+- 13.5 Hz + 0.1 s latency and the 64 × 640 60 Hz baseline: pending.
+
+### Guard gen 20 on the realistic tasks (64 × 640, partial: stopped to give 3v2 the GPU)
+
+| task | guard gen 20 | gen 35 |
+|---|---|---|
+| Realistic (weaving attackers) | 351.2 / **3.6** | 342.8 / 6.4 |
+| Spawn4 | 425.9 / 38.1 | 429.3 / 40.2 |
+| IRL | 185.4 / 80.3 | 188.4 / 79.1 |
+| FittedT024 (full Tello model) | 88.8 / 92.0 | 88.1 (peer) |
+
+- The guard helps where crashes matter (weaving: 6.4 → 3.6) but not where geometry and latency dominate.
+- Not run yet: WideSpeed, Speed100, Spawn5, Half, Robust-Realistic, RR-Spawn6, FittedT024-Spawn6 (the last crashed with CUDA OOM for both policies).
+
+### Full-speed 2v2 retrain cancelled (user, 2026-10-24 ~10:15)
+
+- The user cancelled the no-slow-down retrain on AS-Defend-v0 (session e7's `noslow_official` chain) so 3v2 gets the GPU. Stopped: the chain loop, `es_train.py --name noslow_official` at gen 2 (center breach 85.5% → 75.4%, no checkpoint saved), and the unfinished `evaluate.py` 100 × 1,000 of the distilled network.
+- Kept: `2026-10-24_09-45-54_distill_assigned_441697/checkpoints/agent_distill.pt` (distilled, unscored), `simulation_infra/outputs/noslow_official/` logs, the `es_noslow_official` run folder.
+- The 2v2 submission stays guard ES gen 20 (soft contact).
+- **No-slow-down 2v2 retrain cancelled by the user** (relayed by session action-space-83 at ~10:10; 3v2 has GPU priority because the real flights are 3 vs 2). 83 stopped the chain loop, the ES (`es_noslow_official`, gen 3 reached, no checkpoint saved) and the `evaluate.py` of the distilled network (no score). Kept: `2026-10-24_09-45-54_distill_assigned_441697/checkpoints/agent_distill.pt` and all logs. ES center breach was 85.5 → 75.4 → 71.5% over gens 1–3 (soft-contact guard ES started at 3.9%).
+- Still queued but paused for the 3v2 runs (auto-resume after two 3v2 `es_train.py` runs are up 3 min, 12:30 fallback): soft-contact guard gens 25–60 scoring and the soft-contact 6 m flight-run resume.
+- Hold changed (session 5a; the user needs 3v2 results by 12:00, normal-contact 3v2 first): soft-contact gens 25–60 scoring resumes at 11:30 (single evals), the soft-contact 6 m flight resume at 12:00.
+- **All 2v2 paused (user, relayed by 83: "we dont need 2v2 for now, pause it").** No auto-resume. Loops 450687 (soft guard gens 25–60 scoring, none run yet) and 451650 (soft 6 m flight resume from gen 10) stay SIGSTOPped; restart with `kill -CONT 450687 451650` when the user asks. Only 3v2 runs use the GPU.
+
+### 3v2 runs (2026-10-24, user: normal contact first, results by 12:00; 2v2 paused)
+
+- Hosts' `evaluate.py --task Team1-Defend-3v2-v0 --baseline chase`, 64 × 640: **69.6% / 99.8%**. `evaluate.py` scores 3v2 unchanged.
+- Hosts' bug: `evaluate.py` line 145 (`args_cli.baseline or zero`) raises NameError when neither `--checkpoint` nor `--baseline` is given. It was hit once, when an OOM left an empty checkpoint path. Untouched.
+- Soft-contact distill (keeper 1.6/0.8, guard 2.2/1.5): `2026-10-24_10-08-37_distill_assigned_458395`, copy mse ~0.012 (2v2: 0.003). ES 30 gens running.
+- Normal-contact distill (same teacher without `--soft_closing`): the first attempt died with CUDA OOM at round 8 (log kept as `outputs/distill_3v2_hard_OOM_attempt1.log`). Re-running; ES 60 gens follows through a guarded launcher (`outputs/run_3v2_es_v2.sh`).
+- **Distilled 3v2 networks, hosts' `evaluate.py --task Team1-Defend-3v2-v0`:**
+
+  | network | defaults (64 × 20) | 100 × 1,000 |
+  |---|---|---|
+  | soft contact (`10-08-37_distill_assigned_458395`) | 364.8% / 7.8% | **364.1% / 5.5%** |
+  | normal contact (`10-15-47_distill_assigned_464286`) | 182.5% / 100%* | **257.2% / 25.5%** |
+  | chase baseline | | 69.6% / 99.8% (64 × 640) |
+
+  \* the defaults count only the first 20 finished episodes, all early breaches.
+- Normal contact in 3v2 (25.5%) does far better than the 2v2 normal-contact teacher (98.8%): the keeper and guard keep defenders from piling onto one attacker.
+- ES progress (unperturbed policy, 256 first episodes): soft gen 11–12 0.4%; normal gen 9 14.1% (from 18% at gen 5).
+
+### 3v2 policies shared with the team (2026-10-24 ~11:55, user request)
+
+- Team repo branch `3v2-policies` (off team `main`, commit 5480e49): `deliverable/3v2_policies/` + `deliverable/3v2_policies.zip`. Contents: normal-contact ES gen 30 (flight pick, 342.9% / 6.4% on 100 × 1000), soft-contact ES gen 10 (379.6% / 1.2%; 128 × 1000 2.2%, 200 × 1000 1.5%), 2v2 guard gen 20; skrl IPPO `.pt` plus numpy `.npz` exports (torch parity < 3e-6); hosts' `evaluate.py` logs; integration README (23-input contract, map↔sim frames, roles by `--run` order, 23 vs 35 inputs).
+- `defend_rl.py`: plugin for the organizers' `swarm_ops` that subclasses Pranay's `defend.py` and replaces its tactics with the networks. An offline plumbing check (`check_defend_rl.py`, fake bus and drones in the real map) runs end to end. A network probe under 4 rotations gives consistent actions (defender 0 → slot 0, defender 1 → slot 1, keeper on the line), so the frames are right. Not a skill score: the goal tag sits in a corner of the mapped box (close spawns, 0.65 m/s cap), and even the scripted `defend.py` breaches 12/20 there. The user wants hardware integration and debugging left to the teammate.
+- Normal-contact ES gen 40 (100 × 1000) was still scoring when this was packaged; swap it in if it beats gen 30.
+
+### 3v2 final picks (12:00 deadline)
+
+Hosts' `evaluate.py --task Team1-Defend-3v2-v0` (and the other session's `-3v2-Realistic-v0`, weaving attackers):
+
+| policy | 3v2 official, 100 × 1,000 | unseen 128 / 200 × 1,000 | 3v2 weaving (64 × 640) |
+|---|---|---|---|
+| zero | | | 6.2 / 98.6 |
+| chase | 69.6 / 99.8 (64 × 640) | | 68.7 / 92.2 |
+| **soft ES gen 10** (`policies/team1_defend_3v2_soft/agent_10.pt`) | **379.6 / 1.2** | 378.1 / 2.2 · 381.1 / 1.5 (pooled 1.6%) | **336.0 / 3.3** |
+| soft ES gen 15 | 379.9 / 1.8 | | |
+| normal ES gen 30 (pick at 11:53, superseded) (`policies/team1_defend_3v2_normal/agent_30.pt`) | 342.9 / 6.4 | | 259.5 / 27.2 |
+| **normal ES gen 40 (final normal pick, 11:55)** (`policies/team1_defend_3v2_normal/agent_40.pt`) | **347.3 / 4.9** | | 267.1 / 24.7 |
+| normal ES gen 10 / 20 | 312.7 / 11.2 · 333.6 / 7.3 | | |
+| normal ES gen 15 (peer) | 329.5 / 6.7 (64 × 640) | | 252.0 / 29.7 |
+
+Defender floor time (`smoothness_check.py`, 256 ep): chase 6.1%, soft distilled 2.7%, **soft ES gen 10 (final) 1.2%**, soft ES gen 15 1.3%, normal distilled 32.7% (normal ES gen 40 not measured).
+
+- Soft contact wins on both scenarios; normal contact falls apart against weaving attackers (6.4% → 27.2%).
+- Update (~12:05): normal-contact flight pick switched to ES gen 40 (100 × 1000 347.3% / 4.9%, weaving 64 × 640 24.7%; gen 30 6.4% / 27.2%, gap within noise, p ~0.15), agreed with session 5a. Branch `3v2-policies` commit e39d02c: gen 40 `.pt` + `.npz` added and made `defend_rl.py`'s default; gen 30 kept. Weaving results added: soft g10 336.0% / 3.3%.
+
+### Final soft-contact deliverable folder (2026-10-24, user request)
+
+- **`FINAL_soft_contact/`** (repo root): the two soft-contact winners with their videos and a README of final results (hosts' `evaluate.py` only).
+  - `2v2_guard_es_gen20/`: `agent_20.pt` (sha256 a38f69c6…, = policies/team1_defend_guard20), IPPO cfg, provenance README, videos (guard20, chase, side by side).
+  - `3v2_soft_es_gen10/`: `agent_10.pt` (sha256 bd7f8346…, = policies/team1_defend_3v2_soft), IPPO cfg, provenance README, videos (soft, chase, zero, new chase-vs-soft side by side).
+- Copies only; originals untouched. Pending additions: user-map room results and clips, 3v2 sim-to-real scores (`outputs/eval_3v2_sim2real/`).
+
+### 3v2 in the room on the user's map (`Team1-Defend-3v2-Room-UserMap-v0` / `-Realistic-v0`; hosts' `evaluate.py`, 64 × 640)
+
+The user's map `assets/room_maps/map_tello_3_20261024_095602.yaml` (TELLO-3, 09:56): far wall 6.26 m from the map (tags 6, 9), right wall 2.52 m, asset in front of tag 10, attackers start ≤ ~4.6 m from it. The first chase run used the old 8.5 m far wall; its log is kept as `*_oldfarwall_attempt1.log`.
+
+| policy | room | room, weaving attackers |
+|---|---|---|
+| chase | 104.8% / 99.1% | 108.9% / 99.1% |
+| soft contact gen 10 | **1126.1% / 6.5%** | **1073.2% / 14.8%** |
+| normal contact gen 40 | 620.2% / 10.2% | 421.1% / 43.9% |
+
+Normal-contact folder with every `evaluate.py` number, logs and 4 videos: `simulation_infra/results/3v2_normal_contact/` (METRICS.md).
+- Normal contact gen 40 on unseen sets (hosts' `evaluate.py`, 3v2 official): 128 × 1,000 345.5% / 6.5%, 200 × 1,000 345.8% / 6.4%; **pooled with 100 × 1,000: 5.9%** over ~3,000 episodes (soft gen 10: 1.6%). Normal-contact scripted teacher (`distill.py --check`, 64 × 640): 253.0% / 27.7%, floor time 35.8%.
+
+### Final submission: Mo's runner + intercept guard + fallback (2026-10-24, 13:40–14:50, deadline 15:30)
+
+Folder `final_submission/` (README there). Policy = `~/Downloads/team1_defend_mo_ours.zip`: Mo's real-drone `defend.py` with Team 1's scripted `InterceptGuard`, **fallback chaser on**, and `defend_checkpoint.pt` holding only `guard_kwargs` (RoomReal3 settings, no network). The earlier zip (fallback off, hard-coded settings) is in `final_submission/superseded_first_zip/`.
+- **Runner in the sim** (the user asked for it): new task `Team1-Defend-3v2-MoRunner-v0` (`team1_defend/team1_defend_morunner_env.py`). It loads `defend.py` by path, feeds sim positions to its `Eye`, runs its defender tick at 13.5 Hz and turns rc back into velocity with its GAIN. The official task's attackers and referee are unchanged. Scored with the hosts' unmodified `evaluate.py --baseline zero`.
+- Hosts' `evaluate.py`, official 3v2:
+
+  | Policy | 64 × 640 | 100 × 1,000 |
+  |---|---|---|
+  | **submission (runner)** | **345.9% / 10.7%** | **348.5% / 7.7%** |
+  | chase | 65.9% / 100% | 70.0% / 99.8% |
+  | zero | 7.7% / 100% | 5.6% / 99.9% |
+- **Guard alone** (team repo `main` worktree, `AS-Defend-3v2-v0 --set defender_base=guard`, team `evaluate.py`): 259.3% / 83.1% (64 × 640), 262.2% / 81.8% (100 × 1,000). A defender is on the floor in 99.8–100% of episodes, because the ramming settings meet the stock body-frame force. Team chase 189.8% / 80.3%. **With the runner in the loop, breach is 8% instead of 82%.** No ablation was run, so the gain isn't attributed. The two runs differ in the fallback chaser, the separation push, the 0.65 m/s cap (the team env normalizes by 1.0 m/s), the 13.5 Hz tick, live-only attacker tracking and the harness.
+- Videos (Isaac Lab, `final_submission/videos/`): submission seed 7 45 s (18 intercepted / 0 breaches), seed 11 90 s (35 / 0), chase seed 7 (8 / 5), side by side.
+- Not run (user: "no need for robustness", "dont have the ablations"): fallback-off ablation, unseen 128 / 200 × 1,000 sets.
+- **Runner on the other 3v2 tasks** (videos only, seed 7, 45 s; `MoRunnerMixin` in `team1_defend_morunner_env.py`, new task IDs `Team1-Defend-3v2-{Realistic,Room-UserMap,Room-UserMap-Realistic}-MoRunner-v0`; in the room the runner's geofence is the mapped walls): weaving 14 intercepted / 0 breaches; room on our map 38 / 1 (2 defenders hit a wall); room with weaving attackers 26 / 0. No `evaluate.py` scores on these tasks (deadline 15:30).
