@@ -83,3 +83,25 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     rew_scale_breach = -20.0  # an attacker reaching the site (shared)
     rew_scale_effort = -0.01
     rew_scale_alive = 0.1
+
+    # - retrying attackers (opt-in; off keeps the wave behaviour above)
+    attacker_retry = False
+    """After an interception each attacker independently drops out for the rest of the wave,
+    flies back to the spawn ring and waits, or holds where it was caught and waits, then
+    attacks again. The choice is random per capture because the real rules are unknown.
+    Downed attackers stay in the observation at their real position instead of being zeroed,
+    so defenders can keep track of a drone that may come back. A new wave starts only once
+    every attacker is out."""
+    retry_mode_probs = [0.25, 0.35, 0.4]  # out, return to the ring, hold in place
+    retry_wait_return = [1.0, 6.0]  # [s] wait at the ring before attacking again
+    retry_wait_hold = [0.5, 6.0]  # [s] hold where caught before attacking again (quick retry .. linger)
+    retry_out_descent = 0.5  # [m/s] sink rate of an attacker that is out
+    observe_status = True
+    """Per-attacker "attacking" flags in the observation. False zeroes them, for when the
+    real game does not say which drones were intercepted (positions are still observed)."""
+
+    # - reward fixes (opt-in)
+    fix_reward_glitches = False
+    """Pay the breach penalty once (rewards run after dones, so it was paid on two steps) and
+    measure closing on the same attacker across steps, so target switches and respawns no
+    longer add +-5 jumps."""

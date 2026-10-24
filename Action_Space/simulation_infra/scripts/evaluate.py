@@ -33,6 +33,13 @@ parser.add_argument("--algorithm", type=str, default="IPPO", choices=["IPPO", "M
 parser.add_argument("--video", action="store_true", default=False, help="Record a video of the run.")
 parser.add_argument("--video_length", type=int, default=400, help="Video length in steps.")
 parser.add_argument("--video_dir", type=str, default="videos/evaluate", help="Where to write the video.")
+parser.add_argument(
+    "--set",
+    nargs="*",
+    default=[],
+    metavar="KEY=VALUE",
+    help="env cfg overrides, e.g. attacker_retry=True observe_status=False (Python literals)",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
@@ -55,10 +62,11 @@ def chase_actions(raw, obs):
     num_attackers = raw.cfg.num_attackers
     for agent in raw.cfg.possible_agents:
         rel = obs[agent][:, 9 : 9 + 3 * num_attackers].reshape(raw.num_envs, num_attackers, 3)
-        # downed attackers are zeroed in the observation, so without this mask argmin picks a
-        # dead slot at distance 0 and the defender stops; the alive flags are the last entries
-        alive = obs[agent][:, 9 + 6 * num_attackers : 9 + 7 * num_attackers] > 0.5
-        distance = torch.linalg.norm(rel, dim=-1).masked_fill(~alive, float("inf"))
+        # Only chase attackers that are attacking. Downed ones are zeroed in the stock observation
+        # (argmin would pick a dead slot at distance 0 and stop), and with attacker_retry they
+        # stay visible while returning or holding. Read the env's truth so this still works when
+        # observe_status hides the flags from the policy.
+        distance = torch.linalg.norm(rel, dim=-1).masked_fill(~raw._attacker_alive, float("inf"))
         target = rel[torch.arange(raw.num_envs, device=raw.device), distance.argmin(dim=-1)]
         direction = target / torch.clamp(torch.linalg.norm(target, dim=-1, keepdim=True), min=1e-6)
         actions[agent] = torch.cat([direction, torch.zeros(raw.num_envs, 1, device=raw.device)], dim=-1)
@@ -67,6 +75,15 @@ def chase_actions(raw, obs):
 
 def main():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+    for item in args_cli.set:
+        import ast
+
+        key, value = item.split("=", 1)
+        try:
+            value = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            pass  # plain string
+        setattr(env_cfg, key, value)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     if args_cli.video:
         import os
