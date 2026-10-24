@@ -1,0 +1,101 @@
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /home/rwalia/isaac/IsaacLab/apps/isaaclab.python.headless.kit
+Loading user config located at: '/home/rwalia/isaac/env_isaaclab/lib/python3.11/site-packages/isaacsim/kit/data/Kit/Isaac-Sim/5.1/user.config.json'
+[Info] [carb] Logging to file: /home/rwalia/isaac/env_isaaclab/lib/python3.11/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim/5.1/kit_20261024_074430.log
+2026-10-24T11:44:30Z [132ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-10-24T11:44:30Z [453ms] [Warning] [carb] Acquiring non optional plugin interface which is not listed as dependency: [omni::physx::IPhysxBenchmarks v1.0] (plugin: <default plugin>), by client: omni.physics.physx.plugin. Add it to CARB_PLUGIN_IMPL_DEPS() macro of a client.
+2026-10-24T11:44:30Z [457ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-10-24T11:44:33Z [2,967ms] [Warning] [gpu.foundation.plugin] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 9 9900X3D 12-Core Processor (RADV RAPHAEL_MENDOCINO)
+2026-10-24T11:44:33Z [2,967ms] [Warning] [gpu.foundation.plugin] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 9 9900X3D 12-Core Processor (RADV RAPHAEL_MENDOCINO)
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 580.178.04    | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 5080          | Yes: 0 |     | 16303   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2c02      | e7e6e7d1.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | AMD Ryzen 9 9900X3D 12-Core Pr.. |        |     | 21991   MB | 1002      | 0          |
+|     |                                  |        |     |            | 13c0      | 00000000.. |
+|     |                                  |        |     |            | 10        |            |
+|=============================================================================================|
+| OS: 24.04.5 LTS (Noble Numbat) ubuntu, Version: 24.04.5, Kernel: 6.8.0-147-generic
+| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
+| Processor: AMD Ryzen 9 9900X3D 12-Core Processor
+| Cores: 12 | Logical Cores: 24
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 61878 | Free Memory: 52352
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 2047
+|---------------------------------------------------------------------------------------------|
+2026-10-24T11:44:33Z [3,217ms] [Warning] [gpu.foundation.plugin] CPU performance profile is set to powersave. This profile sets the CPU to the lowest frequency reducing performance.
+2026-10-24T11:44:33Z [3,241ms] [Warning] [omni.kvdb.plugin] Disabling key-value database because another kit process is locking it
+[INFO]: Parsing configuration from: action_space_kit.tasks.direct.tello_defend_room.tello_defend_room_env_cfg:TelloDefendRoomEnvCfg
+2026-10-24T11:44:33Z [3,414ms] [Warning] [isaaclab.envs.direct_marl_env] Seed not set for the environment. The environment creation may not be deterministic.
+
+[36m======================================================================================[0m
+[36m[1m[INFO][IsaacLab]: Logging to file: /tmp/isaaclab/logs/isaaclab_2026-10-24_07-44-33.log[0m
+[36m======================================================================================[0m
+
+[33m07:44:33 [simulation_context.py] WARNING: The `enable_external_forces_every_iteration` parameter in the PhysxCfg is set to False. If you are experiencing noisy velocities, consider enabling this flag. You may need to slightly increase the number of velocity iterations (setting it to 1 or 2 rather than 0), together with this flag, to improve the accuracy of velocity updates.[0m
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.008333333333333333
+	Rendering step-size   : 0.075
+	Environment step-size : 0.075
+[INFO]: Time taken for scene creation : 1.091379 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 200
+	Environment spacing   : 10.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : []
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+2026-10-24T11:44:35Z [4,839ms] [Warning] [omni.physx.fabric.plugin] FabricManager::initializePointInstancer mismatched prototypes on point instancer: /Visuals/site.
+[INFO]: Time taken for simulation start : 0.326556 seconds
+[INFO]: Completed setting up the environment...
+[INFO]: Parsing configuration from: /home/rwalia/Projects/Action_Space/simulation_infra/source/action_space_kit/action_space_kit/tasks/direct/tello_defend_room/agents/skrl_mappo_cfg.yaml
+[38;20m[skrl:INFO] Environment wrapper: Isaac Lab (multi-agent)[0m
+[33;20m[skrl:WARNING] The 'lambda' field in the configuration is deprecated. Use 'gae_lambda' instead[0m
+[33m07:44:35 [runner.py] WARNING: The 'lambda' field in the configuration is deprecated. Use 'gae_lambda' instead[0m
+[33;20m[skrl:WARNING] The 'clip_predicted_values' field in the configuration is deprecated. Use a 'value_clip' value greater than 0 to clip the predicted values instead[0m
+[33m07:44:35 [runner.py] WARNING: The 'clip_predicted_values' field in the configuration is deprecated. Use a 'value_clip' value greater than 0 to clip the predicted values instead[0m
+[33;20m[skrl:WARNING] The 'shared_state_preprocessor' field in the configuration is deprecated. Use 'state_preprocessor' instead[0m
+[33m07:44:35 [runner.py] WARNING: The 'shared_state_preprocessor' field in the configuration is deprecated. Use 'state_preprocessor' instead[0m
+[33;20m[skrl:WARNING] The 'random_timesteps' field in the configuration is not supported by on-policy agents. It will be ignored (remove it from the configuration to suppress this warning)[0m
+[33m07:44:35 [runner.py] WARNING: The 'random_timesteps' field in the configuration is not supported by on-policy agents. It will be ignored (remove it from the configuration to suppress this warning)[0m
+[33;20m[skrl:WARNING] The 'learning_starts' field in the configuration is not supported by on-policy agents. It will be ignored (remove it from the configuration to suppress this warning)[0m
+[33m07:44:35 [runner.py] WARNING: The 'learning_starts' field in the configuration is not supported by on-policy agents. It will be ignored (remove it from the configuration to suppress this warning)[0m
+[38;20m[skrl:INFO] Seed: 42[0m
+[33m07:44:36 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:44:41 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:44:46 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:44:51 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:44:56 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:01 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:06 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:11 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:16 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:21 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:26 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:31 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:36 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:41 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:46 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:51 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:45:56 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:46:01 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:46:06 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:46:11 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+[33m07:46:16 [rigid_object.py] WARNING: The function 'set_external_force_and_torque' will be deprecated in a future release. Please use 'permanent_wrench_composer.set_forces_and_torques' instead.[0m
+
+=== logs/skrl/tello_defend_room/2026-10-24_06-41-36_mappo_torch_tello_defend_room_mappo/checkpoints/agent_7200.pt on AS-Defend-Room-v0 ===
+episodes:            601
+interception rate:   1322.1% of attackers
+breach rate:         14.8% of episodes
+crash rate:          6.8% of episodes
+time to intercept:   10.4 s (mean of 11725)
