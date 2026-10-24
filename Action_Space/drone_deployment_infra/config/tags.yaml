@@ -4,20 +4,21 @@ origin_tag: 10          # this tag's frame becomes the map origin
 
 # Edge length of the BLACK square (not the white border), in mm, per tag id.
 # A tag with null size is still detected and gated (angle, ambiguity) but has no distance.
-# Tags 1-8 are the 5.2 in tags (132.08 mm); tag 10 is the 22.5 in origin (571.5 mm).
-# Final room (2026-10-24): tags 9 and 11 are 180 mm.
+# Final room, measured 2026-10-24 (black square = "detector size", not the printed sheet):
+#   tag 10: 22.5 in;  tags 4-7: 7.5 in sheets, 6 in squares;  tags 8, 9, 11: 180 mm sheets, 144 mm squares.
+# Tags 1-3 are the kit's 5.2 in tags (132.08 mm).
 sizes_mm:
   1: 132.08
   2: 132.08
   3: 132.08
-  4: 132.08
-  5: 132.08
-  6: 132.08
-  7: 132.08
-  8: 132.08
-  9: 180.0
+  4: 152.4
+  5: 152.4
+  6: 152.4
+  7: 152.4
+  8: 144.0
+  9: 144.0
   10: 571.5
-  11: 180.0
+  11: 144.0
 
 detector:               # pupil-apriltags options
   quad_decimate: 2.0    # 2 = faster on 960x720; edges are refined back to full resolution
