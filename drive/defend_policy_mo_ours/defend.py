@@ -14,8 +14,8 @@ What changed from Mo's file:
   tactics      the guard in the room frame (identical to the guard's own frame: X out of the
                tag-10 wall, Y = map x, Z up), with the AS-Defend-RoomReal3 settings (GUARD) and a
                horizontal speed cap of MAX_HSPEED_MPS; the protected site is tag 6's floor spot
-  fallback     Mo's chaser, off by default here (it did not help the guard in spoof tests);
-               DEFEND_FALLBACK=1 turns it on
+  fallback     Mo's chaser, on (DEFEND_FALLBACK=0 turns it off); it triggers 2 m before the tag-6
+               line instead of Mo's fixed 4.5 m from tag 10, so it also works when tag 6 is closer
   sticks       GAIN is the 0.021 m/s per rc unit Team 1 measured on TELLO-7 (Mo's 0.008 made the
                drones fly ~2.6x faster than commanded)
 
@@ -51,13 +51,13 @@ READY_TIMEOUT_S = 20.0       # every drone must see a tag by then, else land all
 ATTACK_SPEED_MPS = 0.3       # scripted attackers (sim trained on 0.4-0.9)
 CAPTURE_M = 0.45             # defender-attacker distance counted as a catch (sim 0.35)
 MAX_RC_DEFENDER = 100        # defender stick limit (100 = ~0.75 m/s, full speed)
-# Fallback: an attacker past FALLBACK_X (m from tag 10) or still alive FALLBACK_T after GO gets ONE chaser,
-# the nearest defender not already chasing (most advanced attacker first), flying at it 0.5 s ahead at
-# full speed; the others keep the policy. Sim (scripts/eval_defend_room_1v1.py --mode 3v2-hybrid, 256
-# episodes): breaches 1.2% -> 0.4% (attackers 0.4-0.9 m/s) and 2.3% -> 0.4% (0.8-1.2 m/s), crashes unchanged.
-# All three chasing is NOT this: they ram each other (99.6% crash in sim).
-FALLBACK = os.environ.get("DEFEND_FALLBACK", "0") == "1"
-FALLBACK_X = 4.5
+# Fallback (Mo's): an attacker within FALLBACK_BEFORE_M of the tag-6 line, or still alive FALLBACK_T after
+# GO, gets ONE chaser, the nearest defender not already chasing (most advanced attacker first), flying at
+# it 0.5 s ahead at full speed; the others keep the guard. Mo's file triggers at a fixed 4.5 m from tag 10,
+# which is 2 m before the line in Rohan's room (6.48 m); relative to the line it also works in rooms where
+# tag 6 is closer. All three chasing is NOT this: they ram each other (99.6% crash in sim).
+FALLBACK = os.environ.get("DEFEND_FALLBACK", "1") != "0"
+FALLBACK_BEFORE_M = 2.0
 FALLBACK_T = 8.0
 ARENA_Y = (-0.40, 2.00)      # room bounds the policy was trained in (Y = map x), m
 ARENA_Z = (0.15, 1.776)
@@ -526,10 +526,10 @@ class DefendPolicy(Policy):
             e.stop.set()
 
     def _chasers(self, now):
-        """{defender num: attacker index} for the fallback (see FALLBACK_X / FALLBACK_T)."""
+        """{defender num: attacker index} for the fallback (see FALLBACK_BEFORE_M / FALLBACK_T)."""
         eyes = self.eyes
         trig = [k for k, a in enumerate(self.attackers) if self.alive[k]
-                and (eyes[a.num].P[0] > FALLBACK_X or now - self.t0 > FALLBACK_T)]
+                and (eyes[a.num].P[0] > self.breach_x - FALLBACK_BEFORE_M or now - self.t0 > FALLBACK_T)]
         trig.sort(key=lambda k: -eyes[self.attackers[k].num].P[0])       # most advanced first
         out, free = {}, list(self.defenders)
         for k in trig:
