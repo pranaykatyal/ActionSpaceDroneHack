@@ -61,12 +61,38 @@ class HoverPolicy:
         return (x @ self.out[0].T + self.out[1]).clamp(-1.0, 1.0).numpy()  # mean action, deterministic
 
 
+class Altitude:
+    """--imu-only state: height from the downward range sensor (tof) and its smoothed rate.
+    x/y stay at 0: the Tello reports no position without tags, and its own hold keeps it put."""
+
+    def __init__(self):
+        self.pos, self.vel, self.t, self.heading = None, np.zeros(3), -1.0, 0.0
+        self._z = None
+
+    def update(self, d: dict, now: float) -> None:
+        tof = d.get("tof")
+        if not d.get("link", True) or tof is None or not 0.05 <= tof < 4.0:
+            return
+        if self._z is not None and tof != self._z and now - self.t < 1.0:
+            self.vel[2] = 0.6 * self.vel[2] + 0.4 * (tof - self._z) / max(now - self.t, 1e-3)
+        if tof != self._z or self.pos is None:
+            self._z, self.t = tof, now
+        else:
+            self.t = now  # same reading again: still fresh, no new motion
+        self.pos = np.array([0.0, 0.0, tof])
+
+    def fresh(self) -> bool:
+        return self.pos is not None and time.time() - self.t < gr.STALE_S
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--drone", default="TELLO-7")
     ap.add_argument("--checkpoint", type=Path, default=HOVER_RUN / "checkpoints/best_agent.pt")
     ap.add_argument("--rise", type=float, default=0.5, help="goal height above the ground pose [m]")
     ap.add_argument("--hold", type=float, default=15.0, help="seconds to hold after takeoff, then land")
+    ap.add_argument("--imu-only", action="store_true",
+                    help="no tags: the policy flies height only (from tof); the Tello holds x/y itself")
     ap.add_argument("--fly", action="store_true")
     ap.add_argument("--gui", default="http://127.0.0.1:8780")
     ap.add_argument("--port", type=int, default=9100)
@@ -117,12 +143,15 @@ def main() -> int:
                     pilot.ingest(msg)
                     for d in m["drones"]:
                         if d["name"] == args.drone:
+                            alt.update(d, time.time())
                             log.write(json.dumps({"kind": "tel", "t_recv": time.time(), "t": m["t"], "seq": m["seq"], **d}) + "\n")
         except BlockingIOError:
             pass
 
+    alt = Altitude()
+
     def log_ctl(sticks, goal, act=None):
-        tr = pilot.tracks.get(args.drone)
+        tr = alt if args.imu_only else pilot.tracks.get(args.drone)
         log.write(json.dumps({
             "kind": "ctl", "t": time.time(), "sticks": list(sticks), "goal": goal.round(3).tolist(),
             "act": None if act is None else act.round(4).tolist(),
@@ -132,20 +161,24 @@ def main() -> int:
         }) + "\n")
 
     def fresh_track():
+        if args.imu_only:
+            return alt if alt.fresh() else None
         tr = pilot.tracks.get(args.drone)
         return tr if tr and tr.heading is not None and time.time() - tr.t < gr.STALE_S else None
 
-    # 1. ground pose (the drone must see a wall tag, e.g. tag 10, from the floor)
+    # 1. ground pose (tags: the drone must see a wall tag, e.g. tag 10, from the floor;
+    #    --imu-only: just a live downward range reading)
     deadline = time.time() + 15.0
     while fresh_track() is None:
         receive()
         if time.time() > deadline:
-            print(f"no fresh wall-tag pose for {args.drone} in 15 s: point it at tag 10 and retry")
+            print(f"no fresh {'tof reading' if args.imu_only else 'wall-tag pose'} for {args.drone} in 15 s")
             return 1
         time.sleep(0.05)
     goal = fresh_track().pos.copy()
     goal[2] += args.rise
-    print(f"ground pose {fresh_track().pos.round(2)} -> goal {goal.round(2)} (guard frame: X out of the wall, Z up)", flush=True)
+    print(f"ground {fresh_track().pos.round(2)} -> goal {goal.round(2)}"
+          + (" (height only)" if args.imu_only else " (guard frame: X out of the wall, Z up)"), flush=True)
 
     # 2. take off through drone_gui and wait until it reports flying
     if gui:
@@ -175,8 +208,15 @@ def main() -> int:
                     obs = np.concatenate([err, tr.vel, np.zeros(3), [0.0, 0.0, -1.0]])
                     act = policy(obs)
                     vel = act[:3] * 1.0  # sim max_lin_speed = 1.0 m/s per axis
-                    vel = vel * min(1.0, args.max_speed / max(np.abs(vel).max(), 1e-6))
-                    sticks = pilot.sticks(tr, vel)
+                    if args.imu_only:
+                        # altitude only: the x/y outputs are dropped and those sticks stay zero, so
+                        # the Tello's own position hold (IMU + downward camera) keeps it in place
+                        vz = float(np.clip(vel[2], -0.3, 0.3))
+                        up = int(np.clip(round(vz / pilot.gain[2]), -pilot.rc_cap[2], pilot.rc_cap[2]))
+                        sticks = (0, 0, up, 0)
+                    else:
+                        vel = vel * min(1.0, args.max_speed / max(np.abs(vel).max(), 1e-6))
+                        sticks = pilot.sticks(tr, vel)
                     note = f"err {err.round(2)} vel {tr.vel.round(2)} act {act.round(2)}"
             if gui:
                 try:
