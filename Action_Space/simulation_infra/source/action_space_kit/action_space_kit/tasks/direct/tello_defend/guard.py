@@ -31,7 +31,8 @@ class InterceptGuard:
         device: str,
         speed: float = 1.2,
         gain: float = 2.5,
-        guard_offset: float = 0.3,
+        guard_offset: float = 0.25,
+        park_lead: float = 0.15,
         min_height: float = 0.5,
         lead_horizon: float = 3.0,
         hysteresis: float = 0.4,
@@ -56,6 +57,7 @@ class InterceptGuard:
         self.dock_range = dock_range  # [m] switch from intercepting to docking this close
         self.dock_gap = dock_gap  # [m] docking distance, inside the 0.35 m capture radius
         self.dock_speed = dock_speed  # [m/s] fastest approach relative to the target while docking
+        self.park_lead = park_lead  # [m] parked guard point is also this far towards the site
         self.intercept_radius = intercept_radius
         self.park_radius = park_radius
         self.speed = speed
@@ -103,7 +105,13 @@ class InterceptGuard:
         # keep clear of the attacker's run-up and was measured 0.4-0.7 m away when it got in.
         to_site = site.unsqueeze(1) - att_pos  # (E, A, 3)
         to_site = to_site / torch.clamp(torch.linalg.norm(to_site, dim=-1, keepdim=True), min=1e-6)
-        park = att_pos.unsqueeze(1) + self.guard_offset * side_of(-rel, to_site.unsqueeze(1).expand_as(rel))
+        # A little towards the site as well: a resuming attacker then flies past the defender
+        # inside capture radius, instead of pulling away from a defender that reacts 0.3 s late.
+        park = (
+            att_pos.unsqueeze(1)
+            + self.guard_offset * side_of(-rel, to_site.unsqueeze(1).expand_as(rel))
+            + self.park_lead * to_site.unsqueeze(1)
+        )
 
         # Perimeter rules, both on the target's straight line to the site centre (attackers
         # aim there, so the line shrinks radially):

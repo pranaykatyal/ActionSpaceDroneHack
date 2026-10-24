@@ -143,5 +143,8 @@ class TelloDefendGuardEnvCfg(TelloDefendEnvCfg):
     defender_base = "guard"
     observe_guard = True
     world_frame_force = True
-    guard_kwargs: dict = {"park_radius": 4.0}  # measured best of 3 / 4 / 5 / 8 m
+    # park_radius: best of 3 / 4 / 5 / 8 m. park_lead 0.25 + offset 0.2 (0.32 m from a parked
+    # attacker): 8.8% breaches vs 13.2% parked purely beside it (400 episodes each)
+    guard_kwargs: dict = {"park_radius": 4.0, "park_lead": 0.25, "guard_offset": 0.2}
+    residual_scale = 0.3
     observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * (NUM_DEFENDERS - 1) + 3 for i in range(NUM_DEFENDERS)}
