@@ -50,3 +50,27 @@ class TelloHoverEnvCfg(DirectRLEnvCfg):
     # - termination
     max_distance = 3.0  # [m] from goal
     min_height = 0.05  # [m] above env origin
+
+    # - realism options (off by default; see TelloHoverRealEnvCfg)
+    world_frame_force = False  # rotate the controller's world-frame force into the body frame
+    lock_yaw = False  # zero the yaw channel
+    obs_noise_pos = 0.0  # [m] std on the goal error, which is also rounded to 1 cm
+    obs_noise_vel = 0.0  # [m/s] std on the velocity
+
+
+@configclass
+class TelloHoverRealEnvCfg(TelloHoverEnvCfg):
+    """Hover as a real Tello flies it (measured 2026-10-24 on TELLO-7, which bobbed +-9 cm with the
+    stock policy): 15 Hz commands, ~0.3 s response plus ~0.1 s link latency, a range sensor in
+    1 cm steps and a noisy differenced velocity, full stick = 0.3 m/s (the cap we fly with), no
+    yaw. The stock policy learned near bang-bang control from exact 60 Hz state."""
+
+    decimation = 8
+    sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=8)
+    command: TelloCommandCfg = TelloCommandCfg(max_lin_speed=0.3, response_time=0.3, command_latency_steps=12)
+    world_frame_force = True
+    lock_yaw = True
+    obs_noise_pos = 0.005
+    obs_noise_vel = 0.05
+    goal_range_z = [0.5, 1.5]
+    rew_scale_action_rate = -0.5

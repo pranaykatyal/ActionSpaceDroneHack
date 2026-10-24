@@ -59,6 +59,8 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         self._actions = {
             agent: torch.zeros(self.num_envs, 4, device=self.device) for agent in self.cfg.possible_agents
         }
+        self._prev_actions = {agent: torch.zeros_like(a) for agent, a in self._actions.items()}
+        self._held = None  # cfg.obs_hold_prob: last observed (attacker pos, vel, defender pos, vel)
         # attacker bookkeeping
         self._attacker_alive = torch.ones(self.num_envs, self.cfg.num_attackers, device=self.device, dtype=torch.bool)
         self._attacker_speed = torch.zeros(self.num_envs, self.cfg.num_attackers, device=self.device)
@@ -75,6 +77,9 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         self._pair_distance = torch.zeros(pairs, device=self.device)
         self._pair_valid = torch.zeros(pairs, device=self.device, dtype=torch.bool)
         self._breach_paid = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        # cfg.downed_fall: a hit attacker landed inside the site; its momentum at the hit
+        self._fall_breach = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._fall_vel = torch.zeros(self.num_envs, self.cfg.num_attackers, 2, device=self.device)
         # Episode outcome, latched in _get_dones before Isaac Lab resets the environment.
         # Reading _breached after env.step() is too late: the reset has already cleared it.
         self._episode_captures = torch.zeros(self.num_envs, device=self.device)
@@ -125,6 +130,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
 
     def _pre_physics_step(self, actions: dict[str, torch.Tensor]) -> None:
         for agent, action in actions.items():
+            self._prev_actions[agent] = self._actions[agent].clone()
             self._actions[agent] = action.clone().clamp(-1.0, 1.0)
         if self.cfg.defender_base == "guard":
             # _guard_cmd was computed from the same state the policy just observed
@@ -140,6 +146,8 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
     def _advance_attackers(self) -> None:
         """Retry mode: returning attackers that reached the ring start waiting; waiting ones whose
         timer ran out attack again at a freshly sampled speed."""
+        if self.cfg.downed_fall:
+            self._land_fallen_attackers()
         pos, _ = self._attacker_states()
         arrived = (self._attacker_mode == RETURNING) & (torch.linalg.norm(pos - self._attacker_goal, dim=-1) < 0.3)
         self._attacker_mode[arrived] = HOLDING
@@ -158,6 +166,11 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         """Retry mode: pick what each just-captured attacker does next (out / return / hold)."""
         probs = torch.tensor(self.cfg.retry_mode_probs, device=self.device, dtype=torch.float)
         choice = torch.multinomial(probs.expand(captured.numel(), -1), 1).view_as(captured) + OUT
+        if self.cfg.downed_fall:
+            # contact capture: every hit attacker falls, keeping its horizontal momentum
+            choice = torch.full_like(choice, OUT)
+            _, vel = self._attacker_states()
+            self._fall_vel = torch.where(captured.unsqueeze(-1), vel[..., :2], self._fall_vel)
         wait_return = sample_uniform(*self.cfg.retry_wait_return, captured.shape, self.device)
         wait_hold = sample_uniform(*self.cfg.retry_wait_hold, captured.shape, self.device)
         wait = torch.where(choice == RETURNING, wait_return, wait_hold)
@@ -169,17 +182,37 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         jump = captured & (choice == TELEPORT)
         if jump.any():
             self._attacker_mode[jump] = HOLDING
-            self._pair_valid &= ~jump.unsqueeze(1)  # distances to it are no longer comparable
-            for i, drone in enumerate(self._attackers):
-                env_ids = jump[:, i].nonzero(as_tuple=False).flatten()
-                if len(env_ids) == 0:
-                    continue
-                state = drone.data.default_root_state[env_ids].clone()
-                state[:, :3] = goal[env_ids, i]
-                state[:, 7:] = 0.0
-                drone.write_root_pose_to_sim(state[:, :7], env_ids)
-                drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
-                self._attacker_ctl[i].reset(env_ids)
+            self._teleport_attackers(jump, goal)
+
+    def _teleport_attackers(self, mask: torch.Tensor, goal: torch.Tensor) -> None:
+        """Move the masked attackers (E, A) to goal (E, A, 3) at rest."""
+        self._pair_valid &= ~mask.unsqueeze(1)  # distances to them are no longer comparable
+        for i, drone in enumerate(self._attackers):
+            env_ids = mask[:, i].nonzero(as_tuple=False).flatten()
+            if len(env_ids) == 0:
+                continue
+            state = drone.data.default_root_state[env_ids].clone()
+            state[:, :3] = goal[env_ids, i]
+            state[:, 7:] = 0.0
+            drone.write_root_pose_to_sim(state[:, :7], env_ids)
+            drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
+            self._attacker_ctl[i].reset(env_ids)
+
+    def _land_fallen_attackers(self) -> None:
+        """cfg.downed_fall: a hit attacker falls with its momentum. Where it lands counts: inside
+        the site it is a breach (debris in the goal zone). Then it respawns at the wall, waits,
+        and attacks again."""
+        pos, _ = self._attacker_states()
+        height = pos[..., 2] - self.scene.env_origins[:, 2:3]
+        landed = (self._attacker_mode == OUT) & (height < 0.15)
+        if not landed.any():
+            return
+        radial = torch.linalg.norm(pos[..., :2] - self.scene.env_origins[:, :2].unsqueeze(1), dim=-1)
+        self._fall_breach |= (landed & (radial < self.cfg.site_radius)).any(dim=-1)
+        self._attacker_mode[landed] = HOLDING
+        wait = sample_uniform(*self.cfg.downed_respawn_wait, landed.shape, self.device)
+        self._attacker_timer = torch.where(landed, wait, self._attacker_timer)
+        self._teleport_attackers(landed, self._attacker_spawn(self.scene.env_origins))
 
     def _to_body(self, drone, force):
         """The controller returns a world-frame force, but set_external_force_and_torque applies
@@ -234,6 +267,9 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 back = torch.cat([back * speed, torch.zeros(self.num_envs, 1, device=self.device)], dim=-1)
                 sink = torch.zeros_like(action)
                 sink[:, 2] = -self.cfg.retry_out_descent / self._attacker_max_speed
+                if self.cfg.downed_fall:  # dropping with the momentum it had when hit
+                    sink[:, :2] = self._fall_vel[:, i] / self._attacker_max_speed
+                    sink[:, 2] = -1.0
                 action = torch.where(mode == RETURNING, back, action)
                 action = torch.where(mode == OUT, sink, action)
             actions.append(action.clamp(-1.0, 1.0))
@@ -254,6 +290,21 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
 
         def_pos = torch.stack([d.data.root_pos_w for d in self._defenders], dim=1)
         def_vel = torch.stack([d.data.root_lin_vel_w for d in self._defenders], dim=1)
+        if self.cfg.obs_noise_pos > 0.0 or self.cfg.obs_noise_vel > 0.0 or self.cfg.obs_hold_prob > 0.0:
+            # Real positions come from AprilTags through ~10 Hz telemetry: noisy, and a drone that
+            # is out of view keeps its last pose for a while. The guard sees the same as the policy.
+            attacker_pos = attacker_pos + self.cfg.obs_noise_pos * torch.randn_like(attacker_pos)
+            attacker_vel = attacker_vel + self.cfg.obs_noise_vel * torch.randn_like(attacker_vel)
+            def_pos = def_pos + self.cfg.obs_noise_pos * torch.randn_like(def_pos)
+            def_vel = def_vel + self.cfg.obs_noise_vel * torch.randn_like(def_vel)
+            if self._held is not None and self.cfg.obs_hold_prob > 0.0:
+                hold_a = (torch.rand(attacker_pos.shape[:2], device=self.device) < self.cfg.obs_hold_prob).unsqueeze(-1)
+                hold_d = (torch.rand(def_pos.shape[:2], device=self.device) < self.cfg.obs_hold_prob).unsqueeze(-1)
+                attacker_pos = torch.where(hold_a, self._held[0], attacker_pos)
+                attacker_vel = torch.where(hold_a, self._held[1], attacker_vel)
+                def_pos = torch.where(hold_d, self._held[2], def_pos)
+                def_vel = torch.where(hold_d, self._held[3], def_vel)
+            self._held = (attacker_pos, attacker_vel, def_pos, def_vel)
         if self.cfg.defender_base == "guard" or self.cfg.observe_guard:
             # the real game may not report status, so the guard can judge it from motion
             attacking = self._attacker_alive if self.cfg.guard_uses_status else infer_attacking(
@@ -266,9 +317,9 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
 
         obs = {}
         for i, drone in enumerate(self._defenders):
-            own_rel_site = drone.data.root_pos_w - site
-            rel_pos = attacker_pos - drone.data.root_pos_w.unsqueeze(1)
-            rel_vel = attacker_vel - drone.data.root_lin_vel_w.unsqueeze(1)
+            own_rel_site = def_pos[:, i] - site
+            rel_pos = attacker_pos - def_pos[:, i].unsqueeze(1)
+            rel_vel = attacker_vel - def_vel[:, i].unsqueeze(1)
             # A downed attacker is zeroed out and flagged, not pushed to a huge sentinel
             # value: a 100 m spike dominates the running normalisation and destabilises
             # the policy. The flag tells the network the slot is empty.
@@ -281,7 +332,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 alive = torch.zeros_like(alive)
             parts = [
                 own_rel_site,
-                drone.data.root_lin_vel_w,
+                def_vel[:, i],
                 drone.data.projected_gravity_b,
                 rel_pos.reshape(self.num_envs, -1),
                 rel_vel.reshape(self.num_envs, -1),
@@ -317,7 +368,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         # breach: a live attacker inside the protected cylinder
         radial = torch.linalg.norm(attacker_pos[:, :, :2] - site[:, :2].unsqueeze(1), dim=-1)
         inside = (radial < self.cfg.site_radius) & self._attacker_alive
-        self._breached = inside.any(dim=-1)
+        self._breached = inside.any(dim=-1) | self._fall_breach
         # Rewards run after dones, so a breach is still set on the step that ends the episode.
         breach_event = self._breached & ~self._breach_paid if self.cfg.fix_reward_glitches else self._breached
         self._breach_paid |= self._breached
@@ -348,6 +399,8 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 self._pair_distance[:, i] = pair
                 self._pair_valid[:, i] = True
             effort = torch.sum(torch.square(self._actions[f"defender_{i}"]), dim=-1)
+            # jerky commands: the stock Hover policy learned bang-bang control and bobbed on TELLO-7
+            action_rate = torch.sum(torch.square(self._actions[f"defender_{i}"] - self._prev_actions[f"defender_{i}"]), dim=-1)
             proximity = torch.exp(-nearest.clamp(min=0.0, max=self.cfg.spawn_radius * 2.0) / self.cfg.spawn_radius)
             # Rates are scaled by step_dt; per-step deltas are not.
             #
@@ -365,6 +418,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 self.cfg.rew_scale_proximity * proximity
                 + self.cfg.rew_scale_effort * effort
                 + self.cfg.rew_scale_alive
+                + self.cfg.rew_scale_action_rate * action_rate
             ) * self.step_dt + self.cfg.rew_scale_closing * closing.clamp(-1.0, 1.0)
             events = (
                 self.cfg.rew_scale_capture * defender_credit[:, i]
@@ -379,7 +433,8 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         all_down = ~self._attacker_alive.any(dim=-1)
         if self.cfg.attacker_retry:
             # attackers come back on their own; a new wave only once every one of them is out
-            all_out = (self._attacker_mode == OUT).all(dim=-1)
+            # with downed_fall every attacker respawns on its own once it has landed
+            all_out = (self._attacker_mode == OUT).all(dim=-1) & (not self.cfg.downed_fall)
             if all_out.any():
                 self._respawn_attackers(all_out.nonzero(as_tuple=False).flatten())
             done = self._breached
@@ -485,11 +540,13 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         )
         self._breached[env_ids] = False
         self._breach_paid[env_ids] = False
+        self._fall_breach[env_ids] = False
         self._reset_retry_state(env_ids)
         self._guard.reset(env_ids)
         self._episode_captures[env_ids] = 0.0
         for agent in self.cfg.possible_agents:
             self._actions[agent][env_ids] = 0.0
+            self._prev_actions[agent][env_ids] = 0.0
         self._prev_distance[env_ids] = self.cfg.spawn_radius
 
     def _debug_vis_callback(self, event):

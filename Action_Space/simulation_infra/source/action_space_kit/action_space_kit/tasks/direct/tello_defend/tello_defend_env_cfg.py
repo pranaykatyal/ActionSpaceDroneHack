@@ -122,6 +122,15 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     lane_offset = [-5.9, -2.1, 0.0]  # [m] wall x from the site, lane y range (room: tag 10 -> tag 6)
     lane_height = [1.0, 1.8]  # [m]
     home_distance = 2.0  # [m] "lane": defenders start this far from the site towards the wall
+    # - real-drone realism (opt-in, see TelloDefendRoomRealEnvCfg)
+    obs_noise_pos = 0.0  # [m] std on every drone position the guard and policy see
+    obs_noise_vel = 0.0  # [m/s] std on every velocity
+    obs_hold_prob = 0.0  # chance per step that a drone's reading is the previous one (tag out of view)
+    rew_scale_action_rate = 0.0  # on the change of each defender's command between steps
+    downed_fall = False
+    """Contact capture: a hit attacker falls with its momentum; landing inside the site is a
+    breach. It then respawns at the wall after downed_respawn_wait and attacks again."""
+    downed_respawn_wait = [1.0, 3.0]  # [s]
     world_frame_force = False
     """Rotate the controller's world-frame force into the body frame before applying it (Isaac
     Lab applies external forces in the body frame). False keeps the stock, buggy behaviour."""
@@ -173,3 +182,27 @@ class TelloDefendRoomEnvCfg(TelloDefendGuardEnvCfg):
         "speed": 0.65, "intercept_radius": 1.35, "park_radius": 3.0,
         "dock_gap": 0.0, "guard_offset": 0.12, "park_lead": 0.1,
     }
+
+
+@configclass
+class TelloDefendRoomRealEnvCfg(TelloDefendRoomEnvCfg):
+    """Room plus what the Hover flight on TELLO-7 taught (2026-10-24): tag-based sensing is noisy
+    and sometimes stale, the command chain is slower (~0.2 s), and jerky policies bob. Hit
+    attackers fall with their momentum (landing in the goal zone counts as a breach) and respawn."""
+
+    command: TelloCommandCfg = TelloCommandCfg(max_lin_speed=0.65, response_time=0.3, command_latency_steps=24)
+    obs_noise_pos = 0.05
+    obs_noise_vel = 0.1
+    obs_hold_prob = 0.1
+    rew_scale_action_rate = -1.0
+    downed_fall = True
+
+
+@configclass
+class TelloDefendRoomReal3EnvCfg(TelloDefendRoomRealEnvCfg):
+    """Three defenders against two respawning attackers."""
+
+    num_defenders = 3
+    possible_agents = [f"defender_{i}" for i in range(3)]
+    action_spaces = {f"defender_{i}": gym.spaces.Box(low=-1.0, high=1.0, shape=(4,)) for i in range(3)}
+    observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * 2 + 3 for i in range(3)}

@@ -11,6 +11,8 @@ to windows/flight_logs/hover_direct_*.jsonl, for later motion fits and training.
   conda activate isaaclab
   python windows\\hover_direct.py --ssid TELLO-7 --dry     # connect + read sensors, no takeoff
   python windows\\hover_direct.py --ssid TELLO-7           # take off, hold +0.5 m for 15 s, land
+  python windows\\hover_direct.py --checkpoint <AS-Tello-Hover-Real-v0 run>\\checkpoints\\best_agent.pt \\
+      --act-scale 0.3 --vel-window 3                      # the policy trained for real conditions
 
 Ctrl-C lands. It also lands if the range reading is lost for 1 s or the drone climbs past
 --ceiling. Needs a clear 1 m around the drone and a textured floor (the Tello's position hold
@@ -43,6 +45,10 @@ def main() -> int:
     ap.add_argument("--hold", type=float, default=15.0, help="seconds to hold, then land")
     ap.add_argument("--hz", type=float, default=15.0)
     ap.add_argument("--max-climb", type=float, default=0.3, help="vertical speed cap [m/s]")
+    ap.add_argument("--act-scale", type=float, default=1.0,
+                    help="m/s at action 1: 1.0 for AS-Tello-Hover-v0 policies, 0.3 for AS-Tello-Hover-Real-v0")
+    ap.add_argument("--vel-window", type=int, default=1,
+                    help="difference the height over this many ticks for the velocity (3 matches the Real task's noise)")
     ap.add_argument("--ceiling", type=float, default=1.6, help="land if the range reading exceeds this [m]")
     ap.add_argument("--min-battery", type=int, default=30)
     ap.add_argument("--dry", action="store_true", help="connect and print sensors and policy output; no takeoff")
@@ -93,6 +99,7 @@ def main() -> int:
             flying = True
             print("airborne", flush=True)
         z_prev, t_prev, vz, last_ok = None, None, 0.0, time.time()
+        history: list[tuple[float, float]] = []  # (t, z) for --vel-window
         t_end, last_print, period = time.time() + args.hold, 0.0, 1.0 / args.hz
         while time.time() < t_end:
             t0 = time.time()
@@ -107,12 +114,17 @@ def main() -> int:
                 if z > args.ceiling:
                     print(f"{z:.2f} m above the ceiling {args.ceiling} m: landing", flush=True)
                     break
-                if z_prev is not None and z != z_prev:
-                    vz = 0.6 * vz + 0.4 * (z - z_prev) / max(t0 - t_prev, 1e-3)
-                if z != z_prev:
-                    z_prev, t_prev = z, t0
+                if args.vel_window > 1:
+                    history = (history + [(t0, z)])[-(args.vel_window + 1):]
+                    if len(history) > 1:
+                        vz = (history[-1][1] - history[0][1]) / max(history[-1][0] - history[0][0], 1e-3)
+                else:
+                    if z_prev is not None and z != z_prev:
+                        vz = 0.6 * vz + 0.4 * (z - z_prev) / max(t0 - t_prev, 1e-3)
+                    if z != z_prev:
+                        z_prev, t_prev = z, t0
                 act = policy(np.array([0.0, 0.0, goal - z, 0.0, 0.0, vz, 0, 0, 0, 0, 0, -1.0]))
-                cmd = float(np.clip(act[2], -args.max_climb, args.max_climb))  # height only
+                cmd = float(np.clip(act[2] * args.act_scale, -args.max_climb, args.max_climb))  # height only
                 up = int(np.clip(round(cmd / UP_GAIN), -100, 100))
             if flying:
                 tello.send_rc_control(0, 0, up, 0)

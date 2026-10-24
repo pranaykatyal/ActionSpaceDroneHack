@@ -11,7 +11,7 @@ from isaaclab.assets import RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import CUBOID_MARKER_CFG, VisualizationMarkers
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform
+from isaaclab.utils.math import quat_apply_inverse, sample_uniform
 
 from action_space_kit.assets import TELLO_MASS
 from action_space_kit.control import TelloVelocityController
@@ -57,6 +57,8 @@ class TelloHoverEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self._previous_actions = self._actions.clone()
         self._actions = actions.clone().clamp(-1.0, 1.0)
+        if self.cfg.lock_yaw:
+            self._actions[:, 3] = 0.0  # the real runners hold heading themselves
 
     def _apply_action(self) -> None:
         force_w, torque_b = self._controller.compute(
@@ -66,14 +68,22 @@ class TelloHoverEnv(DirectRLEnv):
             projected_gravity_b=self._robot.data.projected_gravity_b,
             dt=self.physics_dt,
         )
+        if self.cfg.world_frame_force:
+            # the controller's force is world-frame; Isaac Lab applies it in the body frame
+            force_w = quat_apply_inverse(self._robot.data.root_quat_w, force_w.squeeze(1)).unsqueeze(1)
         self._robot.set_external_force_and_torque(forces=force_w, torques=torque_b, body_ids=[0])
 
     def _get_observations(self) -> dict:
         goal_error_w = self._goal_pos_w - self._robot.data.root_pos_w
+        lin_vel_w = self._robot.data.root_lin_vel_w
+        if self.cfg.obs_noise_pos > 0.0 or self.cfg.obs_noise_vel > 0.0:
+            # what a real Tello gives: a range sensor in 1 cm steps and a differenced velocity
+            goal_error_w = torch.round((goal_error_w + self.cfg.obs_noise_pos * torch.randn_like(goal_error_w)) * 100.0) / 100.0
+            lin_vel_w = lin_vel_w + self.cfg.obs_noise_vel * torch.randn_like(lin_vel_w)
         obs = torch.cat(
             [
                 goal_error_w,
-                self._robot.data.root_lin_vel_w,
+                lin_vel_w,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
             ],
