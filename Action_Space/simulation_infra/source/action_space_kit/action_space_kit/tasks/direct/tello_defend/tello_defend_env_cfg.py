@@ -119,7 +119,8 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     guard_kwargs: dict = {}
     attacker_spawn = "ring"
     """"ring" around the site, or "lane": from a wall lane_offset[0] away (see _attacker_spawn)."""
-    lane_offset = [-5.9, -2.1, 0.0]  # [m] wall x from the site, lane y range (room: tag 10 -> tag 6)
+    lane_offset = [-5.9, -2.1, 1.0]  # [m] wall x from the site, lane y range (room: tag 10 -> tag 6; final map has
+    # tag 6 straight across from tag 10, the earlier one 1.1 m to the side: the range covers both)
     lane_height = [1.0, 1.8]  # [m]
     home_distance = 2.0  # [m] "lane": defenders start this far from the site towards the wall
     # - real-drone realism (opt-in, see TelloDefendRoomRealEnvCfg)
