@@ -196,8 +196,20 @@ def main() -> int:
     t_start, last_print, last_tof_ok, period = time.time(), 0.0, time.time(), 1.0 / args.hz
     try:
         if not args.dry:
+            temp = tello.get_current_state().get("temph", 0)
+            if temp >= 85:
+                print(f"WARNING: drone at {temp} C; a hot Tello refuses to take off. Power it off to cool.", flush=True)
+            tello.get_own_udp_object()["responses"].clear()  # no stale "ok" may answer the takeoff
             tello.takeoff()  # it climbs to ~0.8 m by itself
             flying = True
+            t_up = time.time()
+            while time.time() - t_up < 6.0 and (tello.get_current_state().get("h", 0) or 0) < 30:
+                time.sleep(0.1)
+            if (tello.get_current_state().get("h", 0) or 0) < 30:
+                print(f"takeoff did not happen (height {tello.get_current_state().get('h')} cm, "
+                      f"temperature {tello.get_current_state().get('temph')} C): aborting", flush=True)
+                flying = False
+                return 1
             print("airborne: SEARCH", flush=True)
         while True:
             t0 = time.time()
