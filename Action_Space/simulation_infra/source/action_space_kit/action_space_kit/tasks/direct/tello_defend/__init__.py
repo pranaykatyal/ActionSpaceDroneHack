@@ -49,3 +49,14 @@ gym.register(
         "skrl_mappo_cfg_entry_point": f"{agents.__name__}:skrl_mappo_guard_cfg.yaml",
     },
 )
+
+gym.register(
+    id="AS-Defend-3v2-v0",
+    entry_point=f"{__name__}.tello_defend_env:TelloDefendEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tello_defend_env_cfg:TelloDefend3v2EnvCfg",
+        "skrl_ippo_cfg_entry_point": f"{agents.__name__}:skrl_ippo_cfg.yaml",
+        "skrl_mappo_cfg_entry_point": f"{agents.__name__}:skrl_mappo_cfg.yaml",
+    },
+)

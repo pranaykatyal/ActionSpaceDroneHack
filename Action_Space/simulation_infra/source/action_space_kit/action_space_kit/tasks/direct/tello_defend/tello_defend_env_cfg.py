@@ -233,3 +233,13 @@ class TelloDefendRoomReal3EnvCfg(TelloDefendRoomRealEnvCfg):
     }
     action_spaces = {f"defender_{i}": gym.spaces.Box(low=-1.0, high=1.0, shape=(4,)) for i in range(3)}
     observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * 2 + 3 for i in range(3)}
+
+
+@configclass
+class TelloDefend3v2EnvCfg(TelloDefendEnvCfg):
+    """The hosts' AS-Defend-v0 with three defenders (official settings otherwise): 3 v 2 evaluation."""
+
+    num_defenders = 3
+    possible_agents = [f"defender_{i}" for i in range(3)]
+    action_spaces = {f"defender_{i}": gym.spaces.Box(low=-1.0, high=1.0, shape=(4,)) for i in range(3)}
+    observation_spaces = {f"defender_{i}": _OBS_DIM for i in range(3)}
