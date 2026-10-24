@@ -63,6 +63,18 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     # - scripted attacker behaviour (curriculum stage 0 = straight dive)
     attacker_speed = [0.4, 0.9]  # [m/s]
     attacker_evasion = 0.0  # 0 = straight line, 1 = strong lateral weave
+    attacker_paths: list = []
+    """Probabilities of [straight, weave, via, wander], drawn per attacker at every (re)launch;
+    empty keeps the single attacker_evasion weave. weave: random amplitude, rate and phase.
+    via: first to a random point in the flying space, then at the site (curved / flanking).
+    wander: a smoothly drifting random heading (Ornstein-Uhlenbeck) around the site direction."""
+    weave_amp = [0.3, 1.0]  # lateral fraction of the heading
+    weave_rate = [0.6, 2.5]  # [rad/s]
+    via_x = [0.25, 0.75]  # fraction of the way from the site to the attacker's start
+    via_y = [-2.0, 2.0]  # [m] across, from the site
+    via_z = [0.8, 2.0]  # [m] up
+    wander_sigma = 0.8  # stationary std of the heading drift (fraction of the heading)
+    wander_tau = 1.5  # [s] how long a drift lasts
 
     # - reward scales (per defender)
     # Balance matters here: a breach happens in nearly every early episode, so a huge
@@ -197,6 +209,8 @@ class TelloDefendRoomRealEnvCfg(TelloDefendRoomEnvCfg):
     obs_hold_prob = 0.1
     rew_scale_action_rate = -1.0
     downed_fall = True
+    # attackers do not fly straight: curved, weaving and wandering paths anywhere in the room
+    attacker_paths = [0.15, 0.3, 0.3, 0.25]  # straight, weave, via, wander
 
 
 @configclass

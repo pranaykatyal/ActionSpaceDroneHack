@@ -7,13 +7,17 @@ the drone's own camera (tags.yaml sizes + config/camera/<drone>.yaml). Height co
 downward range sensor, its goal from the tag's height in the image. Yaw is a small P loop
 that keeps the tag centred (the policy was trained with yaw locked).
 
-  1. SEARCH   take off, climb to --height, turn slowly until --tag is seen
+  1. SEARCH   take off, climb to --height, turn slowly until the current tag is seen
   2. APPROACH the policy flies toward the stand-off point, yaw keeps the tag centred
-  3. HOLD     within --tol of the point for --hold seconds, then land
+  3. HOLD     within --tol of the point for --hold seconds, then on to the next tag in --tag
+              (a changing goal, like switching to the next attacker); after the last one, land
 
   conda activate tello
-  python windows\\tag_approach.py --ssid TELLO-3 --tag 8 --dry     # no takeoff: carry it, watch the commands
-  python windows\\tag_approach.py --ssid TELLO-3 --tag 8           # fly
+  python windows\\tag_approach.py --ssid TELLO-7 --tag 6 --dry      # no takeoff: carry it, watch the commands
+  python windows\\tag_approach.py --ssid TELLO-7 --tag 6            # fly to one tag
+  python windows\\tag_approach.py --ssid TELLO-7 --tag 10,8,6       # tag 10, then 8, then 6
+
+A tag too big to fit the image at --standoff (tag 10) gets a longer stand-off automatically.
 
 The policy runs in numpy from windows/policies/hover_real_R1.npz, so this needs no torch
 (the tello env has the camera and AprilTag packages). Ctrl-C or q in the video window
@@ -72,12 +76,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ssid", help="drone WiFi to join first, e.g. TELLO-3 (omit if already joined)")
     ap.add_argument("--iface", default="Wi-Fi 2", help="dongle adapter (netsh wlan show interfaces)")
-    ap.add_argument("--tag", type=int, required=True, help="tag id to fly to")
+    ap.add_argument("--tag", required=True, help="tag id to fly to, or a list visited in order: 10,8,6")
     ap.add_argument("--camera", type=Path, help="default: config/camera/<drone>.yaml")
     ap.add_argument("--checkpoint", type=Path, default=HERE / "policies/hover_real_R1.npz")
     ap.add_argument("--standoff", type=float, default=0.5, help="hover this far in front of the tag [m]")
     ap.add_argument("--height", type=float, default=1.0, help="search height above the floor [m]")
-    ap.add_argument("--hold", type=float, default=10.0, help="seconds to hold at the stand-off, then land")
+    ap.add_argument("--hold", type=float, default=8.0, help="seconds to hold at each stand-off")
     ap.add_argument("--tol", type=float, default=0.10, help="counts as arrived within this [m]")
     ap.add_argument("--act-scale", type=float, default=0.3, help="m/s at action 1 (the Real task's speed)")
     ap.add_argument("--max-speed", type=float, default=0.3, help="horizontal speed cap [m/s]")
@@ -86,7 +90,7 @@ def main() -> int:
     ap.add_argument("--search-time", type=float, default=40.0, help="land if the tag is not found in this [s]")
     ap.add_argument("--yaw-gain", type=float, default=1.2, help="rc yaw per degree of tag bearing")
     ap.add_argument("--ceiling", type=float, default=1.8, help="land if the range reading exceeds this [m]")
-    ap.add_argument("--timeout", type=float, default=90.0, help="land after this long in the air [s]")
+    ap.add_argument("--timeout", type=float, default=150.0, help="land after this long in the air [s]")
     ap.add_argument("--hz", type=float, default=15.0)
     ap.add_argument("--min-battery", type=int, default=30)
     ap.add_argument("--no-window", action="store_true", help="no video window")
@@ -105,14 +109,20 @@ def main() -> int:
         raise SystemExit(f"no camera calibration at {camera_path}; pass --camera")
     K, dist = camera_from_dict(load_yaml(camera_path))
     tags = load_tag_config(CONFIG_DIR / "tags.yaml")
-    if tags.size_m(args.tag) is None:
-        raise SystemExit(f"tag {args.tag} has no size in tags.yaml")
+    route = [int(x) for x in str(args.tag).split(",") if x.strip()]
     detector = TagDetector(tags, K, dist)
-    half_fov = math.degrees(math.atan(K[0, 2] / K[0, 0]))
-    fit = tags.size_m(args.tag) / (2 * math.tan(math.radians(half_fov)))
-    if args.standoff < 1.3 * fit:
-        print(f"NOTE: tag {args.tag} ({tags.size_m(args.tag) * 1000:.0f} mm) only fits the image from "
-              f"{fit:.2f} m; at --standoff {args.standoff} it may be cut off. Try --standoff {1.3 * fit:.1f}", flush=True)
+    half_fov = math.atan(K[1, 2] / K[1, 1])  # the narrower (vertical) half field of view
+    standoffs = []
+    for tag in route:
+        if tags.size_m(tag) is None:
+            raise SystemExit(f"tag {tag} has no size in tags.yaml")
+        fit = 1.3 * tags.size_m(tag) / (2 * math.tan(half_fov))  # whole tag in view with a margin
+        standoffs.append(max(args.standoff, round(fit, 2)))
+        if fit > args.standoff:
+            print(f"tag {tag} ({tags.size_m(tag) * 1000:.0f} mm) needs {fit:.2f} m to fit the image: stand-off {fit:.2f} m", flush=True)
+    leg = 0
+    target, standoff = route[0], standoffs[0]
+    print(f"route {route}, stand-offs {standoffs} m", flush=True)
     policy = NumpyPolicy(args.checkpoint)
 
     from djitellopy import Tello
@@ -131,7 +141,7 @@ def main() -> int:
 
     log_dir = HERE / "flight_logs"
     log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / f"tag_approach_{args.ssid or 'tello'}_tag{args.tag}_{time.strftime('%Y%m%d_%H%M%S')}{'_dry' if args.dry else ''}.jsonl"
+    log_path = log_dir / f"tag_approach_{args.ssid or 'tello'}_tag{'-'.join(map(str, route))}_{time.strftime('%Y%m%d_%H%M%S')}{'_dry' if args.dry else ''}.jsonl"
     log = log_path.open("w")
     log.write(json.dumps({"kind": "meta", **{k: str(v) for k, v in vars(args).items()},
                           "note": "tag_b = tag in body frame [fwd, left, up] m; goal_b = error to the stand-off point"}) + "\n")
@@ -177,7 +187,7 @@ def main() -> int:
             if frame is not None:
                 gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
                 for o in detector.detect(gray):
-                    if o.tag_id == args.tag and o.accepted and o.tvec is not None:
+                    if o.tag_id == target and o.accepted and o.tvec is not None:
                         obs_tag = o
             tag_b = None
             if obs_tag is not None:
@@ -192,12 +202,12 @@ def main() -> int:
                     z_goal = float(np.clip(0.8 * z_goal + 0.2 * (z + tag_b[2]), 0.5, args.ceiling - 0.2))
                 if phase == "SEARCH":
                     phase, phase_t = "APPROACH", t0
-                    print(f"tag {args.tag} found at {np.linalg.norm(tag_b[:2]):.2f} m: APPROACH", flush=True)
+                    print(f"tag {target} found at {np.linalg.norm(tag_b[:2]):.2f} m: APPROACH", flush=True)
             elif phase != "SEARCH" and t0 - seen_t > 2.0:
                 phase, phase_t, held_since, track = "SEARCH", t0, None, []
                 print("tag lost for 2 s: SEARCH", flush=True)
             if phase == "SEARCH" and t0 - phase_t > args.search_time:
-                print(f"tag {args.tag} not found in {args.search_time:.0f} s: landing", flush=True)
+                print(f"tag {target} not found in {args.search_time:.0f} s: landing", flush=True)
                 break
 
             # velocity of the drone in the body frame = minus the tag's apparent motion
@@ -212,7 +222,7 @@ def main() -> int:
                 yaw_rc = args.search_yaw
             elif tag_b is not None:
                 rng = float(np.linalg.norm(tag_b[:2]))
-                goal_xy = tag_b[:2] * (1.0 - args.standoff / max(rng, 1e-3))  # stop short on the line of sight
+                goal_xy = tag_b[:2] * (1.0 - standoff / max(rng, 1e-3))  # stop short on the line of sight
                 n = np.linalg.norm(goal_xy)
                 err[:2] = goal_xy if n <= 1.0 else goal_xy / n  # the policy was trained on errors up to ~1 m
                 bearing = math.degrees(math.atan2(-tag_b[1], tag_b[0]))  # + = tag to the right
@@ -225,8 +235,14 @@ def main() -> int:
                 elif n > 2 * args.tol:
                     held_since = None
                 if held_since and t0 - held_since > args.hold:
-                    print("held: landing", flush=True)
-                    break
+                    leg += 1
+                    if leg == len(route):
+                        print(f"held at tag {target}, route done: landing", flush=True)
+                        break
+                    target, standoff = route[leg], standoffs[leg]
+                    phase, phase_t, held_since, track, seen_t = "SEARCH", t0, None, [], 0.0
+                    print(f"held: next goal tag {target}: SEARCH", flush=True)
+                    continue
             if z is not None:
                 err[2] = z_goal - z
             act = policy(np.array([*err, *v_b, vz, 0, 0, 0, 0, 0, -1.0]))
@@ -243,19 +259,19 @@ def main() -> int:
             if flying:
                 tello.send_rc_control(*rc)
 
-            log.write(json.dumps({"kind": "ctl", "t": t0, "phase": phase, "z": z, "z_goal": round(z_goal, 3),
+            log.write(json.dumps({"kind": "ctl", "t": t0, "phase": phase, "target": target, "z": z, "z_goal": round(z_goal, 3),
                                   "tag_b": None if tag_b is None else tag_b.round(3).tolist(),
                                   "goal_b": err.round(3).tolist(), "v_b": v_b.round(3).tolist(), "vz": round(vz, 3),
                                   "act": act.round(4).tolist(), "rc": rc, "state": state}) + "\n")
             if t0 - last_print > 0.5:
                 where = "no tag" if tag_b is None else (f"tag fwd {tag_b[0]:+.2f} left {tag_b[1]:+.2f} up {tag_b[2]:+.2f}")
-                print(f"{phase:8s} {where}  z {z}  -> err {err.round(2).tolist()}  rc {rc}", flush=True)
+                print(f"{phase:8s} [{target}] {where}  z {z}  -> err {err.round(2).tolist()}  rc {rc}", flush=True)
                 last_print = t0
             if not args.no_window and frame is not None:
                 view = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 if obs_tag is not None:
                     cv2.polylines(view, [obs_tag.corners.astype(np.int32).reshape(-1, 1, 2)], True, (0, 255, 0), 2)
-                cv2.putText(view, f"{phase} tag {args.tag} rc {rc}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                cv2.putText(view, f"{phase} tag {target} rc {rc}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
                 cv2.imshow("tag_approach (q = land)", view)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     print("q: landing", flush=True)

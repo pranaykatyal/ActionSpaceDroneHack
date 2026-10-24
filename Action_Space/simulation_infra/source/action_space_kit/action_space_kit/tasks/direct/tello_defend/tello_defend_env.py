@@ -7,6 +7,7 @@ default and dive towards the protected site.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import torch
@@ -80,6 +81,12 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         # cfg.downed_fall: a hit attacker landed inside the site; its momentum at the hit
         self._fall_breach = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._fall_vel = torch.zeros(self.num_envs, self.cfg.num_attackers, 2, device=self.device)
+        # cfg.attacker_paths: per-attacker path type and its parameters
+        self._path = torch.zeros(shape, device=self.device, dtype=torch.long)
+        self._weave = torch.zeros(*shape, 3, device=self.device)  # amplitude, rate, phase
+        self._via = torch.zeros(*shape, 3, device=self.device)
+        self._via_on = torch.zeros(shape, device=self.device, dtype=torch.bool)
+        self._wander = torch.zeros(*shape, 3, device=self.device)
         # Episode outcome, latched in _get_dones before Isaac Lab resets the environment.
         # Reading _breached after env.step() is too late: the reset has already cleared it.
         self._episode_captures = torch.zeros(self.num_envs, device=self.device)
@@ -161,6 +168,31 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 self.cfg.attacker_speed[0], self.cfg.attacker_speed[1], self._attacker_speed.shape, self.device
             )
             self._attacker_speed = torch.where(go, speed, self._attacker_speed)
+            self._sample_paths(go)
+
+    def _sample_paths(self, mask: torch.Tensor, start: torch.Tensor | None = None) -> None:
+        """cfg.attacker_paths: new path type and parameters for the masked attackers (E, A),
+        from start (E, A, 3; default: where each one is now)."""
+        if not self.cfg.attacker_paths or not mask.any():
+            return
+        shape = mask.shape
+        probs = torch.tensor(self.cfg.attacker_paths, device=self.device, dtype=torch.float)
+        kind = torch.multinomial(probs.expand(mask.numel(), -1), 1).view(shape)
+        self._path = torch.where(mask, kind, self._path)
+        weave = torch.stack([
+            sample_uniform(*self.cfg.weave_amp, shape, self.device),
+            sample_uniform(*self.cfg.weave_rate, shape, self.device),
+            sample_uniform(0.0, 6.2832, shape, self.device),
+        ], dim=-1)
+        self._weave = torch.where(mask.unsqueeze(-1), weave, self._weave)
+        pos = self._attacker_states()[0] if start is None else start
+        origins = self.scene.env_origins.unsqueeze(1)
+        via = origins + (pos - origins) * sample_uniform(*self.cfg.via_x, shape, self.device).unsqueeze(-1)
+        via[..., 1] = origins[..., 1] + sample_uniform(*self.cfg.via_y, shape, self.device)
+        via[..., 2] = origins[..., 2] + sample_uniform(*self.cfg.via_z, shape, self.device)
+        self._via = torch.where(mask.unsqueeze(-1), via, self._via)
+        self._via_on = torch.where(mask, kind == 2, self._via_on)
+        self._wander = torch.where(mask.unsqueeze(-1), torch.zeros_like(self._wander), self._wander)
 
     def _assign_retry_modes(self, captured: torch.Tensor) -> None:
         """Retry mode: pick what each just-captured attacker does next (out / return / hold)."""
@@ -251,7 +283,9 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
             to_site = self.scene.env_origins - drone.data.root_pos_w
             to_site[:, 2] += self.cfg.site_height * 0.5
             direction = to_site / torch.clamp(torch.linalg.norm(to_site, dim=-1, keepdim=True), min=1e-6)
-            if self.cfg.attacker_evasion > 0.0:
+            if self.cfg.attacker_paths:
+                direction = self._path_direction(i, drone.data.root_pos_w, direction)
+            elif self.cfg.attacker_evasion > 0.0:
                 phase = self.episode_length_buf.float() * self.step_dt * 2.0 + i
                 lateral = torch.stack([-direction[:, 1], direction[:, 0], torch.zeros_like(direction[:, 0])], dim=-1)
                 direction = direction + self.cfg.attacker_evasion * torch.sin(phase).unsqueeze(-1) * lateral
@@ -274,6 +308,33 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 action = torch.where(mode == OUT, sink, action)
             actions.append(action.clamp(-1.0, 1.0))
         return actions
+
+    def _path_direction(self, i: int, pos: torch.Tensor, to_site: torch.Tensor) -> torch.Tensor:
+        """Unit heading of attacker i under cfg.attacker_paths, given the unit heading to the site.
+        Called once per physics step (scripted attackers are recomputed every sim step)."""
+        kind = self._path[:, i]
+        lateral = torch.stack([-to_site[:, 1], to_site[:, 0], torch.zeros_like(to_site[:, 0])], dim=-1)
+        lateral = lateral / torch.clamp(torch.linalg.norm(lateral, dim=-1, keepdim=True), min=1e-6)
+        # weave: lateral sine with its own amplitude, rate and phase
+        t = self.episode_length_buf.float() * self.step_dt
+        amp, rate, phase = self._weave[:, i].unbind(-1)
+        weave = to_site + (amp * torch.sin(rate * t + phase)).unsqueeze(-1) * lateral
+        # via: to the via point first; on to the site once within 0.5 m of it
+        to_via = self._via[:, i] - pos
+        self._via_on[:, i] &= torch.linalg.norm(to_via, dim=-1) > 0.5
+        via = torch.where(self._via_on[:, i].unsqueeze(-1), to_via / torch.clamp(
+            torch.linalg.norm(to_via, dim=-1, keepdim=True), min=1e-6), to_site)
+        # wander: Ornstein-Uhlenbeck drift added to the site heading
+        dt = self.physics_dt
+        tau, sigma = self.cfg.wander_tau, self.cfg.wander_sigma
+        noise = torch.randn_like(self._wander[:, i]) * sigma * math.sqrt(2.0 * dt / tau)
+        noise[:, 2] *= 0.4  # mostly horizontal
+        self._wander[:, i] = self._wander[:, i] * (1.0 - dt / tau) + noise
+        wander = to_site + self._wander[:, i]
+        direction = torch.where((kind == 1).unsqueeze(-1), weave, to_site)
+        direction = torch.where((kind == 2).unsqueeze(-1), via, direction)
+        direction = torch.where((kind == 3).unsqueeze(-1), wander, direction)
+        return direction / torch.clamp(torch.linalg.norm(direction, dim=-1, keepdim=True), min=1e-6)
 
     # -- MDP --------------------------------------------------------------------
 
@@ -492,6 +553,18 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         )
         self._prev_distance[env_ids] = self.cfg.spawn_radius
         self._reset_retry_state(env_ids)
+        self._paths_from_spawn(env_ids, spawn)
+
+    def _paths_from_spawn(self, env_ids, spawn: torch.Tensor) -> None:
+        """New paths for every attacker of the listed envs, which were just placed at spawn (N, A, 3)
+        (the sim has not stepped yet, so their positions still read the old ones)."""
+        if not self.cfg.attacker_paths:
+            return
+        mask = torch.zeros_like(self._attacker_alive)
+        mask[env_ids] = True
+        start = self._attacker_states()[0].clone()
+        start[env_ids] = spawn
+        self._sample_paths(mask, start)
 
     def _reset_retry_state(self, env_ids: torch.Tensor) -> None:
         """Attackers just teleported: all attacking again, and old distances are not comparable."""
@@ -542,6 +615,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         self._breach_paid[env_ids] = False
         self._fall_breach[env_ids] = False
         self._reset_retry_state(env_ids)
+        self._paths_from_spawn(env_ids, spawn)
         self._guard.reset(env_ids)
         self._episode_captures[env_ids] = 0.0
         for agent in self.cfg.possible_agents:
