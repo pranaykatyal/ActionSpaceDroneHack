@@ -228,6 +228,8 @@ class TelloDefendRoomReal3EnvCfg(TelloDefendRoomRealEnvCfg):
     guard_kwargs: dict = {
         "speed": 0.65, "intercept_radius": 1.35, "park_radius": 3.0, "dock_gap": 0.0,
         "guard_offset": 0.0, "park_lead": 0.0, "dock_range": 0.0, "gain": 4.0,
+        # organisers' room (4.2 m corridor): 49.6% -> 35.2% breached episodes
+        "lead_horizon": 1.5, "sweep_depth": 0.2,
     }
     action_spaces = {f"defender_{i}": gym.spaces.Box(low=-1.0, high=1.0, shape=(4,)) for i in range(3)}
     observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * 2 + 3 for i in range(3)}

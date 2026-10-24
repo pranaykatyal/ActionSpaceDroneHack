@@ -46,7 +46,7 @@ python swarm_policies.py --run defend_room:3,4,5,6,7     # 3 defenders, then its
 
 | Policy | Task | Breach |
 |---|---|---|
-| `defend` guard | our realistic room (sensing noise, 0.2 s lag, falling debris, curved/weaving/flanking/wandering attackers) | 25.7% |
+| `defend` guard | our realistic 3v2 sim (sensing noise, 0.2 s lag, falling debris, curved/weaving/flanking/wandering attackers): organisers' room / 6 m corridor | 35.2% / 25.7% |
 | `defend_rl` `normal_contact_es_g40` | hosts' AS-Defend-v0 with 3 defenders / Shibani's realistic weaving | 4.9% / 24.7% |
 | `defend_room` B7200 | Rohan's AS-Defend-Room-v0 | 14.8% |
 | hosts' `chase` baseline | AS-Defend-v0 | about 100% |

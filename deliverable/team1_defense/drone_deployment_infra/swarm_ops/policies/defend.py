@@ -48,9 +48,12 @@ SETTLE_S = 2.0         # s after takeoff: hold height only
 UP_GAIN = 0.006        # m/s per rc unit, up channel (Tello fit)
 MAX_CLIMB = 0.4        # m/s
 TAU = 0.35             # s: the drone's velocity lag, for the dead reckoning
-# AS-Defend-RoomReal3-v0 guard settings (3 v 2, random attacker paths: 25.7% breached episodes)
+# AS-Defend-RoomReal3-v0 guard settings, tuned in the organisers' final room (3 v 2, random
+# attacker paths, 256 episodes each: 49.6% breached episodes -> 35.2% with lead_horizon 1.5 and
+# sweep_depth 0.2; the 6 m corridor before it: 25.7%)
 GUARD = {"speed": 0.65, "intercept_radius": 1.35, "park_radius": 3.0, "dock_gap": 0.0,
-         "guard_offset": 0.0, "park_lead": 0.0, "dock_range": 0.0, "gain": 4.0}
+         "guard_offset": 0.0, "park_lead": 0.0, "dock_range": 0.0, "gain": 4.0,
+         "lead_horizon": 1.5, "sweep_depth": 0.2}
 
 
 # -- the guard (numpy port of guard.py; arrays are batched (E, ...) like the original) -----
