@@ -15,6 +15,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", required=True, help="skrl checkpoint (best_agent.pt)")
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--out", default="outputs/hover_policy.png")
+parser.add_argument("--video", nargs="?", const="outputs/hover_policy.mp4", default=None,
+                    help="also render an animated mp4 (default path outputs/hover_policy.mp4)")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
@@ -136,6 +138,67 @@ print(f"[plot] wrote {args_cli.out}", flush=True)
 for name, (_, _, dist, dead) in runs.items():
     mean = torch.nanmean(dist, dim=1)
     print(f"[plot] {name:15s} start {mean[0]*100:5.1f} cm -> 1 s {mean[int(1/dt)]*100:5.1f} cm -> end {mean[-1]*100:5.1f} cm, crashed {int(dead.sum())}", flush=True)
+
+
+def render_video(path, fps=30):
+    """Real-time mp4: 3D flight of the trained policy beside the distance-to-goal race of all pilots."""
+    import imageio_ffmpeg
+    from matplotlib.animation import FFMpegWriter, FuncAnimation
+
+    plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+    pos, goals, _, _ = runs["trained policy"]
+    n_steps, n = pos.shape[0], pos.shape[1]
+    stride = max(1, round(1 / (dt * fps)))  # policy runs at 60 Hz; one video frame per `stride` steps
+    t_all = torch.arange(n_steps) * dt
+
+    vfig = plt.figure(figsize=(14, 6.5))
+    ax3 = vfig.add_subplot(1, 2, 1, projection="3d")
+    lo, hi = torch.nan_to_num(pos, nan=0.0).amin((0, 1)) - 0.1, torch.nan_to_num(pos, nan=0.0).amax((0, 1)) + 0.1
+    ax3.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(0, max(2.0, float(hi[2]))),
+            xlabel="x [m]", ylabel="y [m]", zlabel="height [m]")
+    for i in range(n):
+        ax3.scatter(*goals[i], color=colors[i % 10], marker="x", s=80, linewidths=2)
+    trails = [ax3.plot([], [], [], color=colors[i % 10], lw=1.5, alpha=0.6)[0] for i in range(n)]
+    drones = [ax3.plot([], [], [], "o", color=colors[i % 10], ms=8, mec="k")[0] for i in range(n)]
+    title = ax3.set_title("")
+
+    axd = vfig.add_subplot(1, 2, 2)
+    curves = {}
+    for name, (_, _, dist, dead) in runs.items():
+        mean = torch.nanmean(dist, dim=1)
+        axd.plot(t_all, mean, styles[name], lw=1, alpha=0.25, color="gray")
+        curves[name] = (mean, axd.plot([], [], styles[name], lw=2.5, label=name)[0])
+    cursor = axd.axvline(0, color="k", lw=0.8)
+    axd.set(xlim=(0, float(t_all[-1])), ylim=(0, 0.35), xlabel="time [s]", ylabel="mean distance to goal [m]",
+            title="Distance to goal: trained policy vs baselines")
+    axd.legend(loc="upper right")
+    axd.grid(alpha=0.3)
+    vfig.tight_layout()
+
+    def frame(k):
+        s = k * stride
+        trail_from = max(0, s - int(1.5 / dt))  # last 1.5 s of path
+        for i in range(n):
+            seg = pos[trail_from : s + 1, i]
+            trails[i].set_data(seg[:, 0], seg[:, 1])
+            trails[i].set_3d_properties(seg[:, 2])
+            drones[i].set_data(pos[s : s + 1, i, 0], pos[s : s + 1, i, 1])
+            drones[i].set_3d_properties(pos[s : s + 1, i, 2])
+        for mean, line in curves.values():
+            line.set_data(t_all[: s + 1], mean[: s + 1])
+        cursor.set_xdata([t_all[s]])
+        d = curves["trained policy"][0][s]
+        title.set_text(f"Trained policy, t = {t_all[s]:4.1f} s, mean distance {d * 100:4.1f} cm")
+        ax3.view_init(elev=22, azim=-60 + 30 * s / n_steps)  # slow orbit for depth
+        return [*trails, *drones, *[c[1] for c in curves.values()], cursor, title]
+
+    anim = FuncAnimation(vfig, frame, frames=n_steps // stride, blit=False)
+    anim.save(path, writer=FFMpegWriter(fps=fps, bitrate=2400))
+    print(f"[plot] wrote {path}", flush=True)
+
+
+if args_cli.video:
+    render_video(args_cli.video)
 
 env.close()
 simulation_app.close()
