@@ -99,8 +99,9 @@ python windows\tello_check.py --ssid TELLO-1      # link, battery/height/attitud
 python windows\tello_map_win.py --ssid TELLO-1    # walk the drone around: AprilTag room map (tag-10 frame)
 ```
 
-`tello_map_win.py` runs the repo's `cal_and_map/tello_map.py` mapping loop through its read-only
-`TelloLink`. It writes `config/map_<drone>_<time>.yaml` and never overwrites `map.yaml`, which the
+`tello_map_win.py` runs the repo's `cal_and_map/tello_map.py` mapping loop and only sends allowlisted
+commands (`command`, `streamon/off`, `battery?`). The underlying `TelloLink` class *can* fly the drone
+(`takeoff()/land()/send_rc()` skip its allowlist), but this script never calls them. It writes `config/map_<drone>_<time>.yaml` and never overwrites `map.yaml`, which the
 sim's room task reads. Copy the new map over `map.yaml` once you've checked it. Note:
 `config/camera/tello_{1,2,5-9}.yaml` are copies of TELLO-4's calibration; only TELLO-3 and TELLO-4
 were calibrated themselves.

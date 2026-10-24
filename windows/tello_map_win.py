@@ -1,9 +1,11 @@
 """Windows launcher for cal_and_map/tello_map.py: map the room's AprilTags without flying.
 
 Hold the drone and walk it around; the map is built from what its camera sees. Uses the
-repo's own pieces (map_loop, TagDetector, MapBuilder, VideoReceiver, and TelloLink with its
-read-only allowlist: takeoff/rc/land raise before anything is sent). Only the Linux-only
-parts are replaced: nmcli/ip for joining the WiFi and checking the drone's identity.
+repo's own pieces (map_loop, TagDetector, MapBuilder, VideoReceiver, TelloLink). This script
+only sends allowlisted commands through TelloLink.send (command, streamon/off, battery?).
+TelloLink also has takeoff()/land()/send_rc(), which bypass that allowlist, but nothing here
+calls them. Only the Linux-only parts are replaced: nmcli/ip for joining the WiFi and
+checking the drone's identity.
 
     conda activate tello
     python windows\\tello_map_win.py --ssid TELLO-1
