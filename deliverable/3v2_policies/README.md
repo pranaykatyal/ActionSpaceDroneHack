@@ -60,6 +60,8 @@ attackers respawn in waves during an episode, so it goes above 100%.
 | soft contact, ES gen 10 | 200 × 1000 | 381.1% | 1.5% |
 | soft contact, ES gen 15 | 100 × 1000 | 379.9% | 1.8% |
 
+Soft gen 10 pooled over the three sets (428 × 1000 episodes): about **1.6%** breach.
+
 The `*_64x20.log` files in `results/eval_3v2/` are `evaluate.py`'s defaults. They count only the first 20 finished
 episodes, which are mostly the early breaches, so don't quote them.
 
@@ -88,8 +90,9 @@ breach; delay plus positions-only sensing costs much more. Treat the table as an
    live attacker's line and engages at 1.5 s. Flags: `--keeper 1.6 0.8 --guard 2.2 1.5
    --contact_offset 0` plus `--soft_closing 0.15` for the soft network only.
 2. **Distillation** (DAgger, 12 rounds) into the hosts' skrl IPPO network, one MLP per defender.
-3. **ES fine-tuning** (`es_train.py`, pop 120, sigma 0.003, lr 0.0005; fitness = breach,
-   captures, defender floor time) directly on `evaluate.py`'s outcome counters.
+3. **ES fine-tuning** (`es_train.py`, population 120 × 32 envs each plus 256 envs for the
+   unperturbed policy, sigma 0.003, lr 0.0005; fitness from episodes held `w_hold 0.5`, captures
+   `w_capture 0.01`, defender floor time `w_floor 0.5`) directly on `evaluate.py`'s outcome counters.
 
 The full sim pipeline (`distill.py`, `es_train.py`, task configs, write-up) is on branch `shibani`.
 
@@ -135,6 +138,19 @@ The networks are not interchangeable. In `--run defend_rl:6,7,8`, drone 6 runs `
 A 4th defender would reuse the goalkeeper network. Each attacker keeps its slot while its bus fixes
 are fresh (≤ 0.5 s old and above 25 cm), and an empty slot takes the free attacker nearest the goal.
 The networks see two attackers at most.
+
+### Where the defenders start
+
+In training the defenders start on a 2.5 m ring around the protected site, each at a random
+angle, 1–2 m up, with the attackers entering from 6 m. The site (asset) is the centre the
+observation is measured from (index 0–2). Take off around it the same way: evenly spaced, 120°
+apart for three defenders, about 2.5 m out (`DEFEND_START="x,z;x,z;x,z"` in the map frame).
+Wherever you put the site, the networks guard it: `defend_rl.py` uses the goal tag
+(`DEFEND_GOAL_TAG`, default 6) at 1.25 m height. If the protected asset is defined as the centre of
+the defenders' takeoff spots instead, set those spots around the asset so the two coincide.
+Pranay's default start spots (2 m from the goal toward tag 10, 0.9 m apart, all on one side) are
+fine for his scripted policy. They're outside what the networks saw, so prefer the ring where the
+room allows.
 
 ### Offline check (no drones)
 
