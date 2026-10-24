@@ -152,7 +152,17 @@ def render(frames, cfg, dt):
                 src = pts[0] if j < cfg.num_defenders else pts[1]
                 jj = j if j < cfg.num_defenders else j - cfg.num_defenders
                 tr.set_data([p[jj, 0] for p in src], [p[jj, 1] for p in src])
-            label.set_text(f"env {k}: hits {hits[k]}  breaches {br[k]}")
+            # a top view hides height: show the closest 3D defender pair, red when under 0.3 m
+            p = dp[k]
+            gaps = np.linalg.norm(p[:, None] - p[None], axis=-1) + 1e3 * np.eye(len(p))
+            a_i, b_i = np.unravel_index(gaps.argmin(), gaps.shape)
+            colors = ["tab:blue"] * len(p)
+            if gaps[a_i, b_i] < 0.3:
+                colors[a_i] = colors[b_i] = "red"
+            d.set_color(colors)
+            d.set_edgecolor("k")
+            heights = " ".join(f"{z:.1f}" for z in p[:, 2])
+            label.set_text(f"env {k}: hits {hits[k]}  breaches {br[k]}\nclosest defenders {gaps[a_i, b_i]:.2f} m (3D)  heights {heights} m")
         return []
 
     anim = FuncAnimation(fig, update, frames=len(idx), blit=False)

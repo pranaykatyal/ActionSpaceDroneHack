@@ -133,6 +133,8 @@ def main():
     captures_so_far = torch.zeros(raw.num_envs, raw.cfg.num_attackers, device=raw.device)
     episode_crashed = torch.zeros(raw.num_envs, dtype=torch.bool, device=raw.device)
     crashes = 0
+    episode_min_gap = torch.full((raw.num_envs,), float("inf"), device=raw.device)
+    min_gaps: list[float] = []
 
     while episodes < args_cli.episodes:
         if policy is not None:
@@ -163,6 +165,11 @@ def main():
         # a defender on the floor (knocked down by a collision) stays there; count it
         def_z = torch.stack([d.data.root_pos_w[:, 2] for d in raw._defenders], dim=1) - raw.scene.env_origins[:, 2:3]
         crashed_now = (def_z < 0.15).any(dim=-1) & (step_in_episode > 5)
+        # closest 3D approach between two defenders (a 2D top view hides height)
+        if raw.cfg.num_defenders > 1:
+            dpos = torch.stack([d.data.root_pos_w for d in raw._defenders], dim=1)
+            gap = torch.cdist(dpos, dpos) + 1e3 * torch.eye(raw.cfg.num_defenders, device=raw.device)
+            episode_min_gap = torch.minimum(episode_min_gap, gap.flatten(1).min(dim=-1).values)
         obs, _, terminated, truncated, _ = env.step(actions)
         step_in_episode += 1
         episode_crashed |= crashed_now
@@ -184,6 +191,8 @@ def main():
             attacker_slots += len(finished) * raw.cfg.num_attackers
             crashes += int(episode_crashed[finished].sum().item())
             episode_crashed[finished] = False
+            min_gaps += episode_min_gap[finished].tolist()
+            episode_min_gap[finished] = float("inf")
             for row in finished.tolist():
                 intercept_times += episode_intercept_times[row]
                 episode_intercept_times[row] = []
@@ -207,6 +216,12 @@ def main():
     print("interception rate:   %.1f%% of attackers" % (100.0 * intercepted / max(attacker_slots, 1)), flush=True)
     print("breach rate:         %.1f%% of episodes" % (100.0 * breaches / max(episodes, 1)), flush=True)
     print("defender crash rate: %.1f%% of episodes (a defender ended up on the floor)" % (100.0 * crashes / max(episodes, 1)), flush=True)
+    gaps = [g for g in min_gaps if g < 1e2]
+    if gaps:
+        gaps.sort()
+        close = sum(g < 0.3 for g in gaps)
+        print("defender-defender:   closest 3D gap per episode median %.2f m, worst %.2f m; under 0.3 m in %.1f%% of episodes"
+              % (gaps[len(gaps) // 2], gaps[0], 100.0 * close / len(gaps)), flush=True)
     if intercept_times:
         mean_t = sum(intercept_times) / len(intercept_times)
         print("time to intercept:   %.1f s (mean of %d)" % (mean_t, len(intercept_times)), flush=True)

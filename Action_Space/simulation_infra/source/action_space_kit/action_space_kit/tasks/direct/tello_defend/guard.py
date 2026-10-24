@@ -44,6 +44,9 @@ class InterceptGuard:
         dock_gap: float = 0.3,
         dock_speed: float = 1.0,
         goalkeep: bool = True,
+        sep_range: float = 1.0,
+        sep_min: float = 0.3,
+        sweep_depth: float = 0.45,
     ):
         """speed: defender ground speed assumed for lead intercept [m/s]. gain: position gain
         [1/s]. guard_offset: distance kept from a parked target, towards the site [m].
@@ -60,6 +63,9 @@ class InterceptGuard:
         self.dock_speed = dock_speed  # [m/s] fastest approach relative to the target while docking
         self.goalkeep = goalkeep  # wait beside the path of an attacker coming at the defender
         self.park_lead = park_lead  # [m] parked guard point is also this far towards the site
+        self.sep_range = sep_range  # [m] defenders closer than this stop closing on each other...
+        self.sep_min = sep_min  # [m] ...completely at this gap
+        self.sweep_depth = sweep_depth  # [m] a sweeper waits this much closer to the site than the chaser's fallback
         self.intercept_radius = intercept_radius
         self.park_radius = park_radius
         self.speed = speed
@@ -74,7 +80,10 @@ class InterceptGuard:
         if num_defenders <= num_attackers:
             perms = list(itertools.permutations(range(num_attackers), num_defenders))
         else:
-            perms = list(itertools.product(range(num_attackers), repeat=num_defenders))
+            # every attacker covered: with 3 vs 2, two on one (chaser + sweeper), one on the other;
+            # never all three on one (two sweepers then shared one aim point and sat on each other)
+            perms = [p for p in itertools.product(range(num_attackers), repeat=num_defenders)
+                     if len(set(p)) == num_attackers]
         self.perms = torch.tensor(perms, device=device, dtype=torch.long)  # (P, D)
         self.current = torch.zeros(num_envs, dtype=torch.long, device=device)  # index into perms
 
@@ -157,6 +166,27 @@ class InterceptGuard:
 
         target = self.perms[self.current]  # (E, D)
         chosen = aim.gather(2, target.view(*target.shape, 1, 1).expand(-1, -1, 1, 3)).squeeze(2)
+
+        # Layered defence: when two defenders share a target (more defenders than attackers),
+        # the one further from it is a sweeper. It holds the target's crossing point just outside
+        # the goal zone instead of also chasing it: a second line, not a mid-air pile-up
+        # (measured with 3 vs 2: defenders within 0.3 m in 69% of episodes when both chased).
+        dist_t = dist.gather(2, target.unsqueeze(-1)).squeeze(-1)  # (E, D)
+        same = target.unsqueeze(2) == target.unsqueeze(1)
+        nearer = dist_t.unsqueeze(1) < dist_t.unsqueeze(2)  # [e, d, k]: k is nearer its target than d
+        eye = torch.eye(num_d, dtype=torch.bool, device=self.device).unsqueeze(0)
+        sweeper = (same & (nearer | ((dist_t.unsqueeze(1) == dist_t.unsqueeze(2)) & eye.cumsum(-1).bool().logical_not())) & ~eye).any(-1)
+        # The sweeper is a goalie for every attacker, not a backup for one: it covers whichever
+        # attacking drone is closest to the site, so it catches anything that gets past the markers.
+        att_radial = torch.linalg.norm(att_pos[..., :2] - site[:, None, :2], dim=-1)  # (E, A)
+        threat = torch.where(attacking, att_radial, att_radial + 1e3).argmin(dim=-1)  # (E,)
+        tgt_now = att_pos.gather(1, threat.view(-1, 1, 1).expand(-1, num_d, 3))
+        radial = torch.linalg.norm(tgt_now[..., :2] - site[:, None, :2], dim=-1, keepdim=True).clamp(min=1e-6)
+        # deeper than the chaser's own fallback (intercept_radius), or the two stack up there
+        frac = ((self.intercept_radius - self.sweep_depth) / radial).clamp(max=1.0)
+        crossing = site.unsqueeze(1) + (tgt_now - site.unsqueeze(1)) * frac
+        crossing[..., 2] = torch.maximum(crossing[..., 2], (site_floor + self.min_height).view(-1, 1))
+        chosen = torch.where(sweeper.unsqueeze(-1), crossing, chosen)
         # Close in on an attacking target: dock next to it at its own velocity instead of
         # ramming it, so the capture happens inside capture radius without contact. (Matching
         # a parked target's velocity is left out on purpose: once contact pushes the target,
@@ -168,7 +198,7 @@ class InterceptGuard:
         # capture carried it into the defender (measured: contact at 0.07-0.2 m, both flipped).
         away = def_pos - tgt_pos
         gap = torch.linalg.norm(away, dim=-1, keepdim=True).clamp(min=1e-6)
-        docking = tgt_attacking.unsqueeze(-1) & (gap < self.dock_range)
+        docking = tgt_attacking.unsqueeze(-1) & (gap < self.dock_range) & ~sweeper.unsqueeze(-1)
         heading = tgt_vel / torch.linalg.norm(tgt_vel, dim=-1, keepdim=True).clamp(min=1e-3)
         side = side_of(away, heading)
         dock_point = tgt_pos + self.dock_gap * side
@@ -185,6 +215,20 @@ class InterceptGuard:
         dock_point = torch.where(ahead, on_path, dock_point)
         chosen = torch.where(docking, dock_point, chosen)
         cmd = torch.where(docking, torch.where(ahead, goalie, follow), self.gain * (chosen - def_pos))
+
+        # Separation safety filter between defenders: inside sep_range of a teammate, remove the
+        # part of the command that closes on it (fully at sep_min). Added repulsion alone was
+        # swamped by the pull towards the target (2 v 2: within 0.3 m in 27% of episodes).
+        for i in range(num_d):
+            for k in range(num_d):
+                if i == k:
+                    continue
+                to_k = def_pos[:, k] - def_pos[:, i]
+                gap_ik = torch.linalg.norm(to_k, dim=-1, keepdim=True).clamp(min=1e-6)
+                u = to_k / gap_ik
+                weight = ((self.sep_range - gap_ik) / (self.sep_range - self.sep_min)).clamp(0.0, 1.0)
+                closing = (cmd[:, i] * u).sum(-1, keepdim=True).clamp(min=0.0)
+                cmd[:, i] = cmd[:, i] - weight * closing * u
 
         # Keep clear of every drone it is not trying to catch right now (teammate, parked or
         # other attackers): touching knocks both out of the air, in the sim and for real.
