@@ -11,8 +11,8 @@ TELLO_MANUAL_MAX=100, or the GUI caps the sticks at 40 (~0.3 m/s).
 Dry run by default: it prints the sticks it would send. --fly sends them.
 
   python guard_runner.py --selftest                  # offline: synthetic attackers, no network
-  python guard_runner.py --defenders TELLO-1         # dry run on live telemetry
-  python guard_runner.py --defenders TELLO-1 --fly   # steer TELLO-1 (take it off in the GUI first)
+  python guard_runner.py --defenders TELLO-7         # dry run on live telemetry
+  python guard_runner.py --defenders TELLO-7 --fly   # steer TELLO-7 (take it off in the GUI first)
 
 Scenario (organisers, 2026-10-24): attackers start at tag 10 and fly to tag 6; drone teams are
 reported in telemetry. How an attacker is dismissed is not written anywhere yet, so the
@@ -426,7 +426,7 @@ def selftest(args, poses) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--defenders", nargs="+", default=["TELLO-1"], help="drone names this runner steers")
+    ap.add_argument("--defenders", nargs="+", default=["TELLO-7"], help="drone names this runner steers")
     ap.add_argument("--fly", action="store_true", help="send sticks to drone_gui (default: dry run)")
     ap.add_argument("--gui", default="http://127.0.0.1:8780", help="drone_gui address")
     ap.add_argument("--host", default="0.0.0.0")
