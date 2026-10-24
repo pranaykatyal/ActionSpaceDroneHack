@@ -40,6 +40,7 @@ parser.add_argument(
     metavar="KEY=VALUE",
     help="env cfg overrides, e.g. attacker_retry=True observe_status=False (Python literals)",
 )
+parser.add_argument("--diag", action="store_true", default=False, help="Print the situation just before each breach.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
@@ -83,7 +84,11 @@ def main():
             value = ast.literal_eval(value)
         except (ValueError, SyntaxError):
             pass  # plain string
-        setattr(env_cfg, key, value)
+        owner = env_cfg
+        *path, key = key.split(".")  # dotted keys reach nested cfgs, e.g. command.response_time=0.3
+        for name in path:
+            owner = getattr(owner, name)
+        setattr(owner, key, value)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     if args_cli.video:
         import os
@@ -125,6 +130,9 @@ def main():
     alive_prev = raw._attacker_alive.clone()
     step_in_episode = torch.zeros(raw.num_envs, device=raw.device)
     episode_intercept_times: list[list[float]] = [[] for _ in range(raw.num_envs)]
+    captures_so_far = torch.zeros(raw.num_envs, raw.cfg.num_attackers, device=raw.device)
+    episode_crashed = torch.zeros(raw.num_envs, dtype=torch.bool, device=raw.device)
+    crashes = 0
 
     while episodes < args_cli.episodes:
         if policy is not None:
@@ -141,8 +149,25 @@ def main():
         else:
             actions = {a: torch.zeros(raw.num_envs, 4, device=raw.device) for a in raw.cfg.possible_agents}
 
+        if args_cli.diag:
+            # snapshot before the step: after it, a breached env has already been reset
+            att = torch.stack([d.data.root_pos_w for d in raw._attackers], dim=1) - raw.scene.env_origins.unsqueeze(1)
+            dfn = torch.stack([d.data.root_pos_w for d in raw._defenders], dim=1) - raw.scene.env_origins.unsqueeze(1)
+            snap = {
+                "radial": torch.linalg.norm(att[..., :2], dim=-1),
+                "def_dist": torch.cdist(att, dfn).min(dim=-1).values,
+                "def_radial": torch.linalg.norm(dfn[..., :2], dim=-1),
+                "captures": captures_so_far.clone(),
+                "speed": raw._attacker_speed.clone(),
+            }
+        # a defender on the floor (knocked down by a collision) stays there; count it
+        def_z = torch.stack([d.data.root_pos_w[:, 2] for d in raw._defenders], dim=1) - raw.scene.env_origins[:, 2:3]
+        crashed_now = (def_z < 0.15).any(dim=-1) & (step_in_episode > 5)
         obs, _, terminated, truncated, _ = env.step(actions)
         step_in_episode += 1
+        episode_crashed |= crashed_now
+        if args_cli.diag:
+            captures_so_far += (alive_prev & ~raw._attacker_alive).float()
 
         newly_down = alive_prev & ~raw._attacker_alive
         if newly_down.any():
@@ -157,9 +182,23 @@ def main():
             breaches += int(raw.outcome_breached[finished].sum().item())
             intercepted += int(raw.outcome_captures[finished].sum().item())
             attacker_slots += len(finished) * raw.cfg.num_attackers
+            crashes += int(episode_crashed[finished].sum().item())
+            episode_crashed[finished] = False
             for row in finished.tolist():
                 intercept_times += episode_intercept_times[row]
                 episode_intercept_times[row] = []
+                if args_cli.diag and raw.outcome_breached[row]:
+                    a = int(snap["radial"][row].argmin())  # the attacker that got in
+                    print(
+                        "[diag] breach t=%.1fs attacker=%d prior_captures=%d speed=%.2f "
+                        "nearest_defender=%.2fm defender_radials=%s"
+                        % (step_in_episode[row].item() * raw.step_dt, a, int(snap["captures"][row, a]),
+                           snap["speed"][row, a], snap["def_dist"][row, a],
+                           [round(v, 1) for v in snap["def_radial"][row].tolist()]),
+                        flush=True,
+                    )
+                if args_cli.diag:
+                    captures_so_far[row] = 0.0
             step_in_episode[finished] = 0.0
 
     label = args_cli.checkpoint or f"baseline:{args_cli.baseline or zero}"
@@ -167,6 +206,7 @@ def main():
     print("episodes:            %d" % episodes, flush=True)
     print("interception rate:   %.1f%% of attackers" % (100.0 * intercepted / max(attacker_slots, 1)), flush=True)
     print("breach rate:         %.1f%% of episodes" % (100.0 * breaches / max(episodes, 1)), flush=True)
+    print("defender crash rate: %.1f%% of episodes (a defender ended up on the floor)" % (100.0 * crashes / max(episodes, 1)), flush=True)
     if intercept_times:
         mean_t = sum(intercept_times) / len(intercept_times)
         print("time to intercept:   %.1f s (mean of %d)" % (mean_t, len(intercept_times)), flush=True)

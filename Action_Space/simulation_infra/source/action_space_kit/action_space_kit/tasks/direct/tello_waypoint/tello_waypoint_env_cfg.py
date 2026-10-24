@@ -27,3 +27,8 @@ class TelloWaypointEnvCfg(TelloHoverEnvCfg):
     rew_scale_distance = 10.0
     rew_scale_lin_vel = -0.01
     max_distance = 4.0
+
+    # - optional, off by default (the stock task is unchanged)
+    observe_goal_velocity = False  # append the goal's world velocity to the observation (12 -> 15)
+    rew_clf_shaping = 0.0  # potential-based CLF shaping c * (V(s) - gamma * V(s')), V = |goal error|^2 / 2
+    clf_shaping_gamma = 0.99  # match the agent's discount_factor so shaping leaves the optimal policy unchanged

@@ -105,3 +105,43 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     """Pay the breach penalty once (rewards run after dones, so it was paid on two steps) and
     measure closing on the same attacker across steps, so target switches and respawns no
     longer add +-5 jumps."""
+
+    # - scripted guard base and residual policy (opt-in, see guard.py)
+    attacker_command: TelloCommandCfg | None = None
+    """Attacker dynamics, if different from the defenders' ``command`` (None: the same)."""
+    defender_base = ""
+    """"guard": the action is the scripted interceptor's command plus residual_scale x policy."""
+    residual_scale = 0.5
+    observe_guard = False
+    """Append teammate rel pos/vel and the guard's aim point (rel) to each observation."""
+    guard_uses_status = True
+    """The guard reads the attacking flags; False infers them from motion, as on real drones."""
+    guard_kwargs: dict = {}
+    world_frame_force = False
+    """Rotate the controller's world-frame force into the body frame before applying it (Isaac
+    Lab applies external forces in the body frame). False keeps the stock, buggy behaviour."""
+
+
+@configclass
+class TelloDefendGuardEnvCfg(TelloDefendEnvCfg):
+    """Retrying, teleporting, faster attackers against a guard base plus a learned residual.
+
+    15 Hz control matches the measured real rc rate (13.4 Hz) and gives gamma 0.99 a 6.7 s
+    horizon instead of 1.7 s at 60 Hz. Defenders get the slower, laggier response measured on
+    TELLO-1; attackers keep the snappy default, as the organisers' may be tuned aggressively.
+    """
+
+    decimation = 8
+    sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=8)
+    command: TelloCommandCfg = TelloCommandCfg(response_time=0.3, command_latency_steps=6)
+    attacker_command: TelloCommandCfg = TelloCommandCfg(response_time=0.15)
+    attacker_speed = [0.5, 1.0]
+    attacker_evasion = 0.3
+    attacker_retry = True
+    retry_mode_probs = [0.2, 0.25, 0.3, 0.25]  # out, return, hold, teleport
+    fix_reward_glitches = True
+    defender_base = "guard"
+    observe_guard = True
+    world_frame_force = True
+    guard_kwargs: dict = {"park_radius": 4.0}  # measured best of 3 / 4 / 5 / 8 m
+    observation_spaces = {f"defender_{i}": _OBS_DIM + 6 * (NUM_DEFENDERS - 1) + 3 for i in range(NUM_DEFENDERS)}

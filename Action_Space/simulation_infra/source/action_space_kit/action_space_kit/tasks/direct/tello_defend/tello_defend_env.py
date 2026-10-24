@@ -16,16 +16,18 @@ from isaaclab.assets import RigidObject
 from isaaclab.envs import DirectMARLEnv
 from isaaclab.markers import CUBOID_MARKER_CFG, VisualizationMarkers
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform
+from isaaclab.utils.math import quat_apply_inverse, sample_uniform
 
 from action_space_kit.assets import TELLO_CFG, TELLO_MASS
 from action_space_kit.control import TelloVelocityController
 from action_space_kit.rl.terminal_observation import TerminalObservationMixin
 
+from .guard import InterceptGuard, infer_attacking
 from .tello_defend_env_cfg import TelloDefendEnvCfg
 
-# attacker modes for cfg.attacker_retry; _attacker_alive is True exactly when ATTACKING
-ATTACKING, OUT, RETURNING, HOLDING = 0, 1, 2, 3
+# attacker modes for cfg.attacker_retry; _attacker_alive is True exactly when ATTACKING.
+# TELEPORT is only ever chosen, never kept: the attacker jumps to the ring and HOLDS there.
+ATTACKING, OUT, RETURNING, HOLDING, TELEPORT = 0, 1, 2, 3, 4
 
 
 class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
@@ -35,15 +37,22 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         inertia_zz = float(self._defenders[0].root_physx_view.get_inertias()[0].reshape(3, 3)[2, 2])
-        make_controller = lambda: TelloVelocityController(  # noqa: E731
-            cfg=self.cfg.command,
+        make_controller = lambda command: TelloVelocityController(  # noqa: E731
+            cfg=command,
             num_envs=self.num_envs,
             mass=TELLO_MASS,
             inertia_zz=inertia_zz,
             device=self.device,
         )
-        self._defender_ctl = [make_controller() for _ in range(self.cfg.num_defenders)]
-        self._attacker_ctl = [make_controller() for _ in range(self.cfg.num_attackers)]
+        attacker_command = self.cfg.attacker_command or self.cfg.command
+        self._defender_ctl = [make_controller(self.cfg.command) for _ in range(self.cfg.num_defenders)]
+        self._attacker_ctl = [make_controller(attacker_command) for _ in range(self.cfg.num_attackers)]
+        # cfg.defender_base == "guard": scripted interceptor the policy adds a residual to
+        self._guard = InterceptGuard(
+            self.num_envs, self.cfg.num_defenders, self.cfg.num_attackers, self.device, **self.cfg.guard_kwargs
+        )
+        self._guard_cmd = torch.zeros(self.num_envs, self.cfg.num_defenders, 3, device=self.device)
+        self._guard_aim = torch.zeros(self.num_envs, self.cfg.num_defenders, 3, device=self.device)
 
         self._actions = {
             agent: torch.zeros(self.num_envs, 4, device=self.device) for agent in self.cfg.possible_agents
@@ -115,6 +124,14 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
     def _pre_physics_step(self, actions: dict[str, torch.Tensor]) -> None:
         for agent, action in actions.items():
             self._actions[agent] = action.clone().clamp(-1.0, 1.0)
+        if self.cfg.defender_base == "guard":
+            # _guard_cmd was computed from the same state the policy just observed
+            for i, agent in enumerate(self.cfg.possible_agents):
+                base = torch.cat([self._guard_cmd[:, i], torch.zeros(self.num_envs, 1, device=self.device)], dim=-1)
+                self._actions[agent] = (base + self.cfg.residual_scale * self._actions[agent]).clamp(-1.0, 1.0)
+                # heading stays fixed: the real runner can then map world velocities to rc
+                # (body frame) with the yaw it holds, and the sim's world-frame loop stays honest
+                self._actions[agent][:, 3] = 0.0
         if self.cfg.attacker_retry:
             self._advance_attackers()
 
@@ -150,6 +167,29 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         self._attacker_mode = torch.where(captured, choice, self._attacker_mode)
         self._attacker_timer = torch.where(captured, wait, self._attacker_timer)
         self._attacker_goal = torch.where((captured & (choice == RETURNING)).unsqueeze(-1), goal, self._attacker_goal)
+        # a fourth probability in retry_mode_probs: jump straight to the ring, wait, attack again
+        jump = captured & (choice == TELEPORT)
+        if jump.any():
+            self._attacker_mode[jump] = HOLDING
+            self._pair_valid &= ~jump.unsqueeze(1)  # distances to it are no longer comparable
+            for i, drone in enumerate(self._attackers):
+                env_ids = jump[:, i].nonzero(as_tuple=False).flatten()
+                if len(env_ids) == 0:
+                    continue
+                state = drone.data.default_root_state[env_ids].clone()
+                state[:, :3] = goal[env_ids, i]
+                state[:, 7:] = 0.0
+                drone.write_root_pose_to_sim(state[:, :7], env_ids)
+                drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
+                self._attacker_ctl[i].reset(env_ids)
+
+    def _to_body(self, drone, force):
+        """The controller returns a world-frame force, but set_external_force_and_torque applies
+        forces in the body frame. Without this, any yaw or tilt points the thrust the wrong way;
+        a flipped drone then drives itself down at 2 g (measured: defenders inverted at 10 m/s)."""
+        if not self.cfg.world_frame_force:
+            return force
+        return quat_apply_inverse(drone.data.root_quat_w, force.squeeze(1)).unsqueeze(1)
 
     def _apply_action(self) -> None:
         for i, drone in enumerate(self._defenders):
@@ -160,7 +200,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 projected_gravity_b=drone.data.projected_gravity_b,
                 dt=self.physics_dt,
             )
-            drone.set_external_force_and_torque(forces=force, torques=torque, body_ids=[0])
+            drone.set_external_force_and_torque(forces=self._to_body(drone, force), torques=torque, body_ids=[0])
 
         attacker_actions = self._scripted_attacker_actions()
         for i, drone in enumerate(self._attackers):
@@ -171,7 +211,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
                 projected_gravity_b=drone.data.projected_gravity_b,
                 dt=self.physics_dt,
             )
-            drone.set_external_force_and_torque(forces=force, torques=torque, body_ids=[0])
+            drone.set_external_force_and_torque(forces=self._to_body(drone, force), torques=torque, body_ids=[0])
 
     def _scripted_attacker_actions(self) -> list[torch.Tensor]:
         """Fly each attacker at the protected site, with optional lateral weaving."""
@@ -214,6 +254,18 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         site = self.scene.env_origins.clone()
         site[:, 2] += self.cfg.site_height * 0.5
 
+        def_pos = torch.stack([d.data.root_pos_w for d in self._defenders], dim=1)
+        def_vel = torch.stack([d.data.root_lin_vel_w for d in self._defenders], dim=1)
+        if self.cfg.defender_base == "guard" or self.cfg.observe_guard:
+            # the real game may not report status, so the guard can judge it from motion
+            attacking = self._attacker_alive if self.cfg.guard_uses_status else infer_attacking(
+                attacker_pos, attacker_vel, site
+            )
+            self._guard_cmd, _, self._guard_aim = self._guard.compute(
+                def_pos, def_vel, attacker_pos, attacker_vel, attacking, site,
+                self.scene.env_origins[:, 2], self.cfg.command.max_lin_speed,
+            )
+
         obs = {}
         for i, drone in enumerate(self._defenders):
             own_rel_site = drone.data.root_pos_w - site
@@ -229,17 +281,22 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
             rel_vel = rel_vel.clamp(-self.cfg.obs_clip_vel, self.cfg.obs_clip_vel) * seen
             if self.cfg.attacker_retry and not self.cfg.observe_status:
                 alive = torch.zeros_like(alive)
-            obs[f"defender_{i}"] = torch.cat(
-                [
-                    own_rel_site,
-                    drone.data.root_lin_vel_w,
-                    drone.data.projected_gravity_b,
-                    rel_pos.reshape(self.num_envs, -1),
-                    rel_vel.reshape(self.num_envs, -1),
-                    alive.squeeze(-1),
-                ],
-                dim=-1,
-            )
+            parts = [
+                own_rel_site,
+                drone.data.root_lin_vel_w,
+                drone.data.projected_gravity_b,
+                rel_pos.reshape(self.num_envs, -1),
+                rel_vel.reshape(self.num_envs, -1),
+                alive.squeeze(-1),
+            ]
+            if self.cfg.observe_guard:
+                # teammates (rel pos, rel vel) and where the guard is sending this defender
+                for j in range(self.cfg.num_defenders):
+                    if j != i:
+                        parts.append((def_pos[:, j] - def_pos[:, i]).clamp(-self.cfg.obs_clip_pos, self.cfg.obs_clip_pos))
+                        parts.append((def_vel[:, j] - def_vel[:, i]).clamp(-self.cfg.obs_clip_vel, self.cfg.obs_clip_vel))
+                parts.append((self._guard_aim[:, i] - def_pos[:, i]).clamp(-self.cfg.obs_clip_pos, self.cfg.obs_clip_pos))
+            obs[f"defender_{i}"] = torch.cat(parts, dim=-1)
         return obs
 
     def _get_rewards(self) -> dict[str, torch.Tensor]:
@@ -410,6 +467,7 @@ class TelloDefendEnv(TerminalObservationMixin, DirectMARLEnv):
         self._breached[env_ids] = False
         self._breach_paid[env_ids] = False
         self._reset_retry_state(env_ids)
+        self._guard.reset(env_ids)
         self._episode_captures[env_ids] = 0.0
         for agent in self.cfg.possible_agents:
             self._actions[agent][env_ids] = 0.0

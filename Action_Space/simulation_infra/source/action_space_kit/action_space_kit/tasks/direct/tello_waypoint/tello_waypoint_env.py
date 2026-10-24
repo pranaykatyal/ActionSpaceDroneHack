@@ -18,9 +18,32 @@ class TelloWaypointEnv(TelloHoverEnv):
     cfg: TelloWaypointEnvCfg
 
     def __init__(self, cfg: TelloWaypointEnvCfg, render_mode: str | None = None, **kwargs):
+        if cfg.observe_goal_velocity:
+            cfg.observation_space = 15
         super().__init__(cfg, render_mode, **kwargs)
         self._goal_vel_w = torch.zeros(self.num_envs, 3, device=self.device)
         self._goal_resample_steps = max(int(self.cfg.goal_resample_time_s / self.step_dt), 1)
+        self._clf_prev = torch.zeros(self.num_envs, device=self.device)
+
+    def _clf_value(self) -> torch.Tensor:
+        """Control Lyapunov function V = |goal - drone|^2 / 2."""
+        return 0.5 * torch.sum(torch.square(self._goal_pos_w - self._robot.data.root_pos_w), dim=-1)
+
+    def _get_observations(self) -> dict:
+        obs = super()._get_observations()
+        if self.cfg.observe_goal_velocity:
+            obs["policy"] = torch.cat([obs["policy"], self._goal_vel_w], dim=-1)
+        return obs
+
+    def _get_rewards(self) -> torch.Tensor:
+        rewards = super()._get_rewards()
+        if self.cfg.rew_clf_shaping != 0.0:
+            # F = gamma * Phi(s') - Phi(s) with Phi = -c V. Terminal states keep their real V rather than
+            # Phi = 0, which would pay a bonus for dying far from the goal.
+            value = self._clf_value()
+            rewards = rewards + self.cfg.rew_clf_shaping * (self._clf_prev - self.cfg.clf_shaping_gamma * value)
+            self._clf_prev = value
+        return rewards
 
     def _resample_goal_velocity(self, env_ids: torch.Tensor) -> None:
         """Give the listed environments a new goal heading and speed."""
@@ -56,3 +79,4 @@ class TelloWaypointEnv(TelloHoverEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
         self._resample_goal_velocity(env_ids)
+        self._clf_prev[env_ids] = self._clf_value()[env_ids]  # shaping starts from the reset state
