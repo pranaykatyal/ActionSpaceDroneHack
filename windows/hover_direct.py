@@ -11,8 +11,10 @@ to windows/flight_logs/hover_direct_*.jsonl, for later motion fits and training.
   conda activate isaaclab
   python windows\\hover_direct.py --ssid TELLO-7 --dry     # connect + read sensors, no takeoff
   python windows\\hover_direct.py --ssid TELLO-7           # take off, hold +0.5 m for 15 s, land
-  python windows\\hover_direct.py --checkpoint <AS-Tello-Hover-Real-v0 run>\\checkpoints\\best_agent.pt \\
-      --act-scale 0.3 --vel-window 3                      # the policy trained for real conditions
+
+Defaults fly windows/policies/hover_real_R1.pt (AS-Tello-Hover-Real-v0). For an AS-Tello-Hover-v0
+policy pass --checkpoint <run>\\checkpoints\\best_agent.pt --act-scale 1.0 --vel-window 1.
+See windows/HOVER_README.md.
 
 Ctrl-C lands. It also lands if the range reading is lost for 1 s or the drone climbs past
 --ceiling. Needs a clear 1 m around the drone and a textured floor (the Tello's position hold
@@ -30,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hover_runner import HOVER_RUN, HoverPolicy  # noqa: E402
+from hover_runner import HoverPolicy  # noqa: E402
 from tello_check import TELLO_IP, join, local_ip_toward_tello  # noqa: E402
 
 UP_GAIN = 0.006  # m/s per rc unit, up channel (control/tello_motion_fit.yaml)
@@ -40,14 +42,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ssid", help="drone WiFi to join first, e.g. TELLO-7 (omit if already joined)")
     ap.add_argument("--iface", default="Wi-Fi 2", help="dongle adapter (netsh wlan show interfaces)")
-    ap.add_argument("--checkpoint", type=Path, default=HOVER_RUN / "checkpoints/best_agent.pt")
+    ap.add_argument("--checkpoint", type=Path, default=Path(__file__).resolve().parent / "policies/hover_real_R1.pt")
     ap.add_argument("--rise", type=float, default=0.5, help="hold this far above the ground reading [m]")
     ap.add_argument("--hold", type=float, default=15.0, help="seconds to hold, then land")
     ap.add_argument("--hz", type=float, default=15.0)
     ap.add_argument("--max-climb", type=float, default=0.3, help="vertical speed cap [m/s]")
-    ap.add_argument("--act-scale", type=float, default=1.0,
+    ap.add_argument("--act-scale", type=float, default=0.3,
                     help="m/s at action 1: 1.0 for AS-Tello-Hover-v0 policies, 0.3 for AS-Tello-Hover-Real-v0")
-    ap.add_argument("--vel-window", type=int, default=1,
+    ap.add_argument("--vel-window", type=int, default=3,
                     help="difference the height over this many ticks for the velocity (3 matches the Real task's noise)")
     ap.add_argument("--ceiling", type=float, default=1.6, help="land if the range reading exceeds this [m]")
     ap.add_argument("--min-battery", type=int, default=30)

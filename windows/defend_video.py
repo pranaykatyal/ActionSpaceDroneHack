@@ -76,7 +76,10 @@ def main():
 
         runner = Runner(SkrlVecEnvWrapper(env, ml_framework="torch"), load_cfg_from_registry(args_cli.task, "skrl_mappo_cfg_entry_point"))
         runner.agent.load(args_cli.checkpoint)
-        runner.agent.set_running_mode("eval")
+        if hasattr(runner.agent, "set_running_mode"):
+            runner.agent.set_running_mode("eval")
+        else:  # skrl 1.x
+            runner.agent.enable_training_mode(False)
         policy = runner.agent
     obs, _ = env.reset()
     agents = raw.cfg.possible_agents

@@ -3,3 +3,4 @@ logs/
 
 Action_Space/simulation_infra/tello_defend/
 windows/flight_logs/*_dry.jsonl
+__pycache__/
