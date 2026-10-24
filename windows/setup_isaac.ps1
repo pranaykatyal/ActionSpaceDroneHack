@@ -60,6 +60,10 @@ Run cmd /d /c "$IsaacRoot\IsaacLab\isaaclab.bat" --install
 Run $py -m pip install -q --editable source\isaaclab
 Pop-Location
 
+# The GUI app loads Isaac's RTX-sensor hdf5.dll (1.14.6) before Isaac Lab imports h5py; on
+# Windows the same-named DLL is reused, so h5py must be built on 1.14.6 too or the window crashes
+Run $py -m pip install -q "h5py==3.14.0"
+
 Step "this kit"
 Run $py -m pip install -q -e "$KitDir\source\action_space_kit"
 Run $py -m pip install -q djitellopy

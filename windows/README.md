@@ -43,6 +43,12 @@ team return +1545). `sb3/play.py` on `policies/approach_it5_room_fixed` scores n
 success 0.887. If a run dies with `Unable to open the usd file at path: https://omniverse-content-production...`,
 the Wi-Fi dropped while Isaac was fetching a stock asset. Just re-run.
 
+If a run **with a window** (no `--headless`) crashes and the Kit log shows
+`Failed to import python module isaaclab_tasks ... DLL load failed while importing _errors`, h5py is
+the wrong build: `pip install h5py==3.14.0` (`setup_isaac.ps1` does this). The GUI preloads Isaac's
+own HDF5 1.14.6 DLL, and h5py 3.16 needs 2.0. Kit logs live in
+`<conda env>\Lib\site-packages\isaacsim\kit\logs\Kit\Isaac-Sim\5.1\`.
+
 `TELLO_USD_PATH` is required; without it the code looks in `/mnt/data`. Use the commands in
 `Action_Space/CLAUDE.md` with `\` paths; drop `setsid nohup ... &` (start a second terminal instead).
 12 GB of VRAM fits a few hundred envs. Do real training on SF Compute.
