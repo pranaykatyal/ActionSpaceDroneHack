@@ -19,6 +19,7 @@ plugin that plugs them into `defend.py`'s runner code, and an offline check. Non
 | `weights/skrl_ippo_cfg.yaml` | skrl agent config the `.pt` files were trained with (load them with it). |
 | `defend_net.py` | numpy forward pass + observation builder + map↔sim frame conversion (the contract below, in code). |
 | `defend_rl.py` | Reference plugin for `swarm_ops/policies/`: `defend.py`'s state handling and safety, our networks as the tactics. |
+| `defend.py` | Pranay's scripted defense plugin (copy of `deliverable/defend.py`); `defend_rl.py` builds on it. |
 | `check_defend_rl.py` | Offline plumbing check of the plugin in the organizers' runner (fake bus and drones). |
 | `export_npz.py` | `.pt` → `.npz`, with a torch-vs-numpy parity check. |
 | `results/` | The hosts' `evaluate.py` logs behind every number below (Isaac warnings filtered out). |
@@ -96,14 +97,15 @@ The full sim pipeline (`distill.py`, `es_train.py`, task configs, write-up) is o
 
 `defend_rl.py` is a drop-in policy for the organizers' current `drone_deployment_infra/swarm_ops`,
 the version with the telemetry bus (`policies/telemetry.py`). It subclasses Pranay's
-`deliverable/defend.py` (`DefendPolicy`) and replaces only the tactics. Attackers still come from the
-bus, defenders are still dead-reckoned from start spots, and the separation, geofence, speed caps
-and rc mapping are unchanged. Read `../README.md` (defend.py) first; everything there applies.
+`deliverable/defend.py` (`DefendPolicy`, included here as `defend.py`) and replaces only the
+tactics. Attackers still come from the bus, defenders are still dead-reckoned from start spots, and
+the separation, geofence, speed caps and rc mapping are unchanged. Read defend.py's README first
+(`deliverable/README.md` on the team repo, branch `main`); everything there applies.
 
 ### Install
 
 Copy into `drone_deployment_infra/swarm_ops/policies/`:
-`defend.py` (from `deliverable/`), `defend_rl.py`, `defend_net.py`, and the `weights/` folder
+`defend.py` (Pranay's, included here), `defend_rl.py`, `defend_net.py`, and the `weights/` folder
 (only the `.npz` files are needed at runtime). Then register it in `policies/__init__.py`:
 
 ```python
